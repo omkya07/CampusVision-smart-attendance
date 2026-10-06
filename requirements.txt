@@ -1,6 +1,9 @@
 # CampusVision — Smart Attendance (full install)
 # Python 3.10–3.13 · use a venv
 
+# Force pip to download the NVIDIA CUDA 12.1 version of PyTorch instead of CPU
+--extra-index-url https://download.pytorch.org/whl/cu121
+
 # Database
 pymongo[srv]>=4.6
 dnspython>=2.0

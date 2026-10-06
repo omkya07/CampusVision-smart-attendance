@@ -48,7 +48,8 @@ All essential data is stored in **MongoDB Atlas (cloud)** — open the project o
    MONGODB_DB_NAME=campusvision
    ```
 
-### 2. Python Environment
+### 2. Python Environment (GPU Default)
+*Note: This project is configured to use NVIDIA GPUs by default for maximum speed. Ensure you have the [CUDA 12.1 Toolkit](https://developer.nvidia.com/cuda-12-1-0-download-archive) and cuDNN installed on your PC.*
 ```powershell
 cd CampusVision-smart-attendance
 python -m venv venv

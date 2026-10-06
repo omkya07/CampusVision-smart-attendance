@@ -1,8 +1,8 @@
 # CampusVision — Smart Attendance (full install)
 # Python 3.10–3.13 · use a venv
 
-# Force pip to download the NVIDIA CUDA 12.1 version of PyTorch instead of CPU
---extra-index-url https://download.pytorch.org/whl/cu121
+# Force pip to download the NVIDIA CUDA 12.6 version of PyTorch (for Python 3.13 compatibility)
+--extra-index-url https://download.pytorch.org/whl/cu126
 
 # Database
 pymongo[srv]>=4.6
@@ -21,6 +21,7 @@ Pillow>=10.0
 # Primary face engine (SCRFD detector + ArcFace 512-d)
 insightface>=0.7.3
 # NVIDIA GPU: use onnxruntime-gpu. CPU-only machines: pip install onnxruntime instead
+--extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
 onnxruntime-gpu>=1.17.0
 
 # Fast gallery matching

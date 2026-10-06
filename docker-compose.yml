@@ -1,0 +1,23 @@
+# CampusVision CPU stack
+#   docker compose up --build
+# UI: http://localhost:5000
+# Requires a .env file (copy .env.example -> .env, fill in MONGODB_URI)
+
+services:
+  campusvision:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: campusvision:cpu
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      DET_SIZE: "640"
+      DET_THRESH: "0.30"
+      USE_FACE_TILES: "0"
+      SAMPLE_INTERVAL_SEC: "2.5"
+      FRAME_RESIZE_WIDTH: "960"
+      TF_CPP_MIN_LOG_LEVEL: "3"
+    restart: unless-stopped

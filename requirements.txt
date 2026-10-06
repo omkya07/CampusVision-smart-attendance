@@ -1,0 +1,33 @@
+# CampusVision — Smart Attendance (full install)
+# Python 3.10–3.13 · use a venv
+
+# Database
+pymongo[srv]>=4.6
+dnspython>=2.0
+python-dotenv>=1.0
+certifi>=2024.0.0
+
+# Web
+Flask==3.0.3
+
+# Image / video
+opencv-python>=4.8,<5
+numpy>=1.24,<3
+Pillow>=10.0
+
+# Primary face engine (SCRFD detector + ArcFace 512-d)
+insightface>=0.7.3
+# NVIDIA GPU: use onnxruntime-gpu. CPU-only machines: pip install onnxruntime instead
+onnxruntime-gpu>=1.17.0
+
+# Fast gallery matching
+faiss-cpu>=1.7.4
+
+# Two-stage distant faces: person detect → head crop → ArcFace
+ultralytics>=8.0.0
+
+# Webcam anti-spoof (DeepFace MiniFASNet)
+deepface==0.0.93
+tf-keras
+torch
+mtcnn

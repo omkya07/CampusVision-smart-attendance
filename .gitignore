@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+.venv/
+
+# MongoDB credentials - never commit
+.env
+
+# Legacy local data files (obsolete now that MongoDB is the source of truth -
+# migrate_to_mongo.py reads these once, then they're no longer used)
+backend/students_database.pkl
+backend/attendance_log.csv
+backend/classrooms.json
+backend/cameras.json
+backend/manual_review_log.csv
+
+# YOLO model weights (auto-downloaded on first CCTV run)
+backend/yolov8n-face.pt
+backend/*.pt
+yolov8n.pt
+yolo*.pt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

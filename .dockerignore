@@ -1,0 +1,15 @@
+venv/
+.venv/
+.venv-1/
+__pycache__/
+*.pyc
+*.pkl
+*.csv
+*.json
+.git/
+.trt_cache/
+*.pt
+.env
+**/__pycache__/
+**/*.pyc
+.DS_Store

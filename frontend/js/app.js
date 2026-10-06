@@ -64,7 +64,7 @@ async function loadStudents() {
   }
   body.innerHTML = students.map(s => {
     const avatar = s.photo
-      ? `<img src="${s.photo}" class="student-avatar" alt="${s.name}" title="${s.name}">`
+      ? `<img src="${s.photo}" class="student-avatar has-photo" alt="${s.name}" title="Click to view full photo" onclick="openImageModal('${s.photo}', '${s.name}')">`
       : `<div class="avatar-placeholder" title="No photo">${getInitials(s.name)}</div>`;
     return `
       <tr>
@@ -672,7 +672,7 @@ async function openSessionDetail(sessionEnc, date) {
   document.getElementById("sessionDetailCount").textContent = `${records.length} student(s) present`;
   document.getElementById("sessionDetailBody").innerHTML = records.map((r, i) => {
     const snap = r.snapshot
-      ? `<img src="${r.snapshot}" class="snap-thumb" alt="${r.name}" title="Verification snapshot for ${r.name}">`
+      ? `<img src="${r.snapshot}" class="snap-thumb" alt="${r.name}" title="Click to view snapshot" onclick="openImageModal('${r.snapshot}', '${r.name} - Snapshot')">`
       : `<div class="avatar-placeholder" style="width:34px; height:34px;">${getInitials(r.name)}</div>`;
     return `
       <tr>
@@ -901,4 +901,40 @@ async function stopSessionById(sid) {
 
 // Initial load
 loadStudents();
+
+// ---------- Image Modal ----------
+function openImageModal(src, captionText) {
+  const modal = document.getElementById("imageModal");
+  const img = document.getElementById("imageModalImg");
+  const caption = document.getElementById("imageModalCaption");
+  
+  if (!modal || !img) return;
+  
+  img.src = src;
+  caption.textContent = captionText || "";
+  
+  // Force a tiny delay so the transition triggers
+  setTimeout(() => {
+    modal.classList.add("show");
+  }, 10);
+  
+  // Close on Escape key
+  document.addEventListener("keydown", handleModalEsc);
+}
+
+function closeImageModal() {
+  const modal = document.getElementById("imageModal");
+  if (modal) {
+    modal.classList.remove("show");
+    // Clear image source after animation ends to free memory
+    setTimeout(() => {
+      document.getElementById("imageModalImg").src = "";
+    }, 300);
+  }
+  document.removeEventListener("keydown", handleModalEsc);
+}
+
+function handleModalEsc(e) {
+  if (e.key === "Escape") closeImageModal();
+}
 

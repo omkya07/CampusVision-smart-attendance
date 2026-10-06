@@ -306,3 +306,94 @@ tr:hover td { background: rgba(49,57,77,0.35); }
   z-index: 5;
   position: relative;
 }
+
+/* --- Image Modal --- */
+.image-modal {
+  display: flex;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 9999;
+  justify-content: center;
+  align-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.image-modal.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.image-modal-content {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 8px;
+  max-width: 90vw;
+  max-height: 90vh;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.4), 0 0 0 1px inset rgba(255,255,255,0.05);
+  transform: scale(0.9) translateY(20px);
+  opacity: 0;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+}
+
+.image-modal.show .image-modal-content {
+  transform: scale(1) translateY(0);
+  opacity: 1;
+}
+
+.image-modal-content img {
+  max-width: 100%;
+  max-height: calc(90vh - 60px);
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+.image-modal-close {
+  position: absolute;
+  top: -16px;
+  right: -16px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  z-index: 10;
+}
+
+.image-modal-close:hover {
+  background: var(--danger-color);
+  color: white;
+  transform: scale(1.1);
+}
+
+.image-modal-caption {
+  text-align: center;
+  padding: 12px 4px 4px 4px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* Make avatars clickable */
+.student-avatar.has-photo {
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.student-avatar.has-photo:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+}

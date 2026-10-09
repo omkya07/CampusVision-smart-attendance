@@ -15,8 +15,12 @@ The system follows a classic decoupled client-server architecture:
 ### Backend (Python / Flask)
 - **Flask:** Used as the core web framework. 
   - *Why:* It's lightweight, highly customizable, and integrates flawlessly with Python-based Machine Learning libraries without the bloat of larger frameworks like Django.
-- **DeepFace:** Used for face detection, anti-spoofing (liveness checks), and biometric encoding. 
-  - *Why:* DeepFace abstracts complex models (like Facenet512, VGG-Face) into simple function calls, providing extremely high accuracy for facial recognition and preventing photo-spoofing.
+- **InsightFace (ArcFace):** The core facial recognition engine.
+  - *Why:* Provides state-of-the-art accuracy for generating mathematical facial embeddings (512-d) and scales incredibly well to massive crowds in CCTV images.
+- **DeepFace:** Used exclusively for Anti-spoofing (Liveness Checks). 
+  - *Why:* DeepFace has a built-in pre-trained `MiniFASNet` model that instantly detects if a face shown to a webcam is a real human or a printed photo/screen.
+- **Ultralytics (YOLOv8):** Used as the primary person-detector before face-cropping.
+  - *Why:* YOLOv8 can detect bodies/people in a large classroom photo instantly, allowing the system to zoom in on heads before passing them to InsightFace for recognition.
 - **OpenCV (cv2):** Used for image processing, cropping, and base64 parsing. 
   - *Why:* It is the absolute industry standard for handling, resizing, and modifying image arrays quickly before passing them to ML models.
 - **PyMongo:** Used to interface with MongoDB. 
@@ -41,7 +45,7 @@ The system follows a classic decoupled client-server architecture:
    - Student logs into the Mobile portal via Google/Firebase.
    - Student enters the Enrollment flow. The browser uses `face-api.js` to intelligently detect their head pose.
    - Once they align perfectly to the center, left, and right angles, the browser automatically captures the frame and POSTs it to the Flask Backend.
-   - The Backend uses `DeepFace` to extract a mathematical facial embedding (a matrix of numbers representing the face) and stores it in MongoDB.
+   - The Backend uses `InsightFace` to extract a mathematical facial embedding (a matrix of numbers representing the face) and stores it in MongoDB.
 
 2. **Session Creation & Smart Scanning (Admin):**
    - Admin creates a new "Class Session" for a specific branch, subject, and time.

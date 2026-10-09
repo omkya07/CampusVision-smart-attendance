@@ -31,7 +31,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*tf.losses.sparse_softmax.*")
 
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, g
 try:
     from deepface import DeepFace
     DEEPFACE_AVAILABLE = True
@@ -49,6 +49,7 @@ from datetime import datetime
 from face_engine import FaceEngine
 from session_manager import init_session_manager
 from db import get_db, check_connection
+from auth import require_student_auth, get_firebase_config
 
 app = Flask(__name__, static_folder="../frontend", static_url_path="")
 
@@ -88,6 +89,10 @@ def load_students_db():
             "prn": prn,
             "roll_no": doc.get("roll_no", ""),
             "name": doc.get("name", ""),
+            "email": doc.get("email", ""),
+            "phone": doc.get("phone", ""),
+            "academic_year": doc.get("academic_year", ""),
+            "semester": doc.get("semester", ""),
             "division": doc.get("division", ""),
             "branch": doc.get("branch", ""),
             "photo": doc.get("photo", ""),
@@ -120,6 +125,132 @@ def save_students_db(students_dict):
         db.students.replace_one({"_id": str(prn)}, doc, upsert=True)
 
 
+def get_year_code(semester):
+    sem = (semester or "").strip().upper()
+    if sem in ["SEM-I", "SEM-II", "SEM-1", "SEM-2", "1", "2"] or "FY" in sem:
+        return "FY"
+    if sem in ["SEM-III", "SEM-IV", "SEM-3", "SEM-4", "3", "4"] or "SY" in sem:
+        return "SY"
+    if sem in ["SEM-V", "SEM-VI", "SEM-5", "SEM-6", "5", "6"] or "TY" in sem:
+        return "TY"
+    if sem in ["SEM-VII", "SEM-VIII", "SEM-7", "SEM-8", "7", "8"] or "LY" in sem:
+        return "LY"
+    return "UNKNOWN"
+
+
+def get_semesters_for_year(year_code):
+    y = (year_code or "").upper()
+    if "FY" in y or "1" in y:
+        return ["SEM-I", "SEM-II", "SEM-1", "SEM-2", "1", "2"]
+    if "SY" in y or "2" in y:
+        return ["SEM-III", "SEM-IV", "SEM-3", "SEM-4", "3", "4"]
+    if "TY" in y or "3" in y:
+        return ["SEM-V", "SEM-VI", "SEM-5", "SEM-6", "5", "6"]
+    if "LY" in y or "4" in y:
+        return ["SEM-VII", "SEM-VIII", "SEM-7", "SEM-8", "7", "8"]
+    return []
+
+
+def build_student_selection_query(classes=None, branches=None, divisions=None, semesters=None):
+    """
+    Builds MongoDB query. If 'classes' is provided, each element represents an exact
+    class selection (branch, year/semester, division) matched via $or.
+    Otherwise falls back to Cartesian product of branches, divisions, semesters.
+    """
+    if classes:
+        clauses = []
+        for c in classes:
+            clause = {}
+            if isinstance(c, dict):
+                br = (c.get("branch") or "").strip()
+                div = (c.get("division") or "").strip()
+                sems = c.get("semesters", [])
+                yr = (c.get("year") or "").strip()
+                if br:
+                    clause["branch"] = br
+                if div:
+                    clause["division"] = div
+                if sems:
+                    clause["semester"] = {"$in": sems}
+                elif yr:
+                    mapped_sems = get_semesters_for_year(yr)
+                    if mapped_sems:
+                        clause["semester"] = {"$in": mapped_sems}
+            elif isinstance(c, str):
+                parts = c.split("_")
+                if len(parts) >= 3:
+                    br_code, yr_code, div_code = parts[0], parts[1], parts[2]
+                    clause["division"] = div_code
+                    mapped_sems = get_semesters_for_year(yr_code)
+                    if mapped_sems:
+                        clause["semester"] = {"$in": mapped_sems}
+                    clause["branch"] = {"$regex": f"^{br_code}", "$options": "i"}
+            if clause:
+                clauses.append(clause)
+        if clauses:
+            return {"$or": clauses} if len(clauses) > 1 else clauses[0]
+        return {}
+
+    query = {}
+    if branches:
+        query["branch"] = {"$in": branches}
+    if divisions:
+        query["division"] = {"$in": divisions}
+    if semesters:
+        query["semester"] = {"$in": semesters}
+    return query
+
+
+def student_matches_selection(student, classes=None, branches=None, divisions=None, semesters=None):
+    """
+    In-memory test for face gallery filtering.
+    """
+    s_branch = (student.get("branch") or "").strip()
+    s_div = (student.get("division") or "").strip()
+    s_sem = (student.get("semester") or "").strip()
+    s_yr = get_year_code(s_sem)
+
+    if classes:
+        for c in classes:
+            if isinstance(c, dict):
+                req_br = (c.get("branch") or "").strip()
+                req_div = (c.get("division") or "").strip()
+                req_sems = c.get("semesters", [])
+                req_yr = (c.get("year") or "").strip().upper()
+
+                if req_br and req_br.lower() != s_branch.lower():
+                    continue
+                if req_div and req_div.upper() != s_div.upper():
+                    continue
+                if req_sems:
+                    if s_sem not in req_sems and s_yr != req_yr:
+                        continue
+                elif req_yr:
+                    if s_yr != req_yr:
+                        continue
+                return True
+            elif isinstance(c, str):
+                parts = c.split("_")
+                if len(parts) >= 3:
+                    b_c, y_c, d_c = parts[0].upper(), parts[1].upper(), parts[2].upper()
+                    if d_c != s_div.upper():
+                        continue
+                    if y_c != s_yr:
+                        continue
+                    if b_c not in s_branch.upper():
+                        continue
+                    return True
+        return False
+
+    if branches and s_branch not in branches:
+        return False
+    if divisions and s_div not in divisions:
+        return False
+    if semesters and s_sem not in semesters:
+        return False
+    return True
+
+
 def decode_base64_image(data_url):
     """Convert a base64 data URL (from browser canvas or file) into an RGB numpy array."""
     header, encoded = data_url.split(",", 1) if "," in data_url else ("", data_url)
@@ -128,7 +259,7 @@ def decode_base64_image(data_url):
     return np.array(img)
 
 
-def mark_attendance(student, session_name="Manual Scan", snapshot_b64=None):
+def mark_attendance(student, session_name="Manual Scan", snapshot_b64=None, date_str=None):
     """
     Mark student present for a specific lecture/lab session in MongoDB Atlas.
     Same student can be marked once per session per day (multiple sessions OK).
@@ -137,7 +268,7 @@ def mark_attendance(student, session_name="Manual Scan", snapshot_b64=None):
     """
     db = get_db()
     session_name = (session_name or "Manual Scan").strip() or "Manual Scan"
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = date_str or datetime.now().strftime("%Y-%m-%d")
     now_time = datetime.now().strftime("%H:%M:%S")
 
     # Duplicate = same PRN + same session + same date
@@ -146,10 +277,22 @@ def mark_attendance(student, session_name="Manual Scan", snapshot_b64=None):
         "session": session_name,
         "date": today,
     })
+    
+    snapshot = snapshot_b64 or student.get("photo", "")
+
     if existing:
+        if existing.get("status") == "absent":
+            db.attendance.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {
+                    "status": "present",
+                    "time": now_time,
+                    "snapshot": snapshot
+                }}
+            )
+            return True
         return False
 
-    snapshot = snapshot_b64 or student.get("photo", "")
     db.attendance.insert_one({
         "session": session_name,
         "prn": str(student["prn"]),
@@ -160,8 +303,10 @@ def mark_attendance(student, session_name="Manual Scan", snapshot_b64=None):
         "date": today,
         "time": now_time,
         "snapshot": snapshot,
+        "status": "present"
     })
     return True
+
 
 
 # Multi-session manager (many classrooms / teachers at once)
@@ -174,6 +319,11 @@ sessions = init_session_manager(load_students_db, mark_attendance)
 @app.route("/")
 def serve_index():
     return send_from_directory(app.static_folder, "index.html")
+
+
+@app.route("/student")
+def serve_student_index():
+    return send_from_directory(app.static_folder, "student.html")
 
 
 # ---------------------------------------------------------
@@ -189,6 +339,10 @@ def get_students():
             "prn": s["prn"],
             "roll_no": s["roll_no"],
             "name": s["name"],
+            "email": s.get("email", ""),
+            "phone": s.get("phone", ""),
+            "academic_year": s.get("academic_year", ""),
+            "semester": s.get("semester", ""),
             "division": s["division"],
             "branch": s["branch"],
             "photo": s.get("photo", "") or s.get("photos", {}).get("center", ""),
@@ -214,6 +368,10 @@ def add_student():
         "prn": prn,
         "roll_no": data.get("roll_no", "").strip(),
         "name": data.get("name", "").strip(),
+        "email": data.get("email", "").strip().lower(),
+        "phone": data.get("phone", "").strip(),
+        "academic_year": data.get("academic_year", "").strip(),
+        "semester": data.get("semester", "").strip(),
         "division": data.get("division", "").strip(),
         "branch": data.get("branch", "").strip(),
         "encodings": {},   # angle -> encoding
@@ -221,6 +379,59 @@ def add_student():
     save_students_db(db)
     return jsonify({"success": True, "message": "Student registered"})
 
+@app.route("/api/students_upload", methods=["POST"])
+def upload_students_csv():
+    if "csv_file" not in request.files:
+        return jsonify({"success": False, "message": "No file uploaded"}), 400
+    
+    file = request.files["csv_file"]
+    if not file.filename.endswith(".csv"):
+        return jsonify({"success": False, "message": "Only CSV files are supported"}), 400
+        
+    import csv, io
+    try:
+        stream = io.StringIO(file.stream.read().decode("utf-8-sig"), newline=None)
+        reader = csv.DictReader(stream)
+        db = load_students_db()
+        count = 0
+        
+        for row in reader:
+            normalized_row = {k.strip().lower(): v.strip() for k, v in row.items() if k}
+            prn = normalized_row.get("prn", "")
+            if not prn: continue
+            
+            if prn not in db:
+                db[prn] = {"encodings": {}}
+                
+            db[prn]["prn"] = prn
+            db[prn]["roll_no"] = normalized_row.get("roll no", normalized_row.get("roll_no", db[prn].get("roll_no", "")))
+            db[prn]["name"] = normalized_row.get("name", normalized_row.get("full name", db[prn].get("name", "")))
+            db[prn]["email"] = normalized_row.get("email", db[prn].get("email", ""))
+            db[prn]["phone"] = normalized_row.get("phone", normalized_row.get("phone number", db[prn].get("phone", "")))
+            db[prn]["academic_year"] = normalized_row.get("academic year", normalized_row.get("academic_year", db[prn].get("academic_year", "")))
+            db[prn]["semester"] = normalized_row.get("semester", normalized_row.get("sem", db[prn].get("semester", "")))
+            db[prn]["division"] = normalized_row.get("division", normalized_row.get("div", db[prn].get("division", "")))
+            db[prn]["branch"] = normalized_row.get("branch", normalized_row.get("dept", db[prn].get("branch", "")))
+            count += 1
+            
+        save_students_db(db)
+        return jsonify({"success": True, "message": f"Imported/Updated {count} students."})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Error parsing CSV: {str(e)}"}), 400
+
+@app.route("/api/students/csv_template", methods=["GET"])
+def download_csv_template():
+    import io
+    from flask import Response
+    output = io.StringIO()
+    output.write("PRN,Roll No,Name,Email,Phone,Academic Year,Semester,Division,Branch\n")
+    output.write("2425000386,386,Omkar Subhash Bhogulkar,omkar@example.com,9876543210,2026-27,SEM-I,A,Computer Science\n")
+    output.write("25260001125,1125,Prajwal Vinayak Jadhav,prajwal@example.com,9988776655,2026-27,SEM-I,B,Information Technology\n")
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment;filename=students_template.csv"}
+    )
 
 @app.route("/api/students/<prn>", methods=["DELETE"])
 def delete_student(prn):
@@ -235,6 +446,20 @@ def delete_student(prn):
 # ---------------------------------------------------------
 # Face enrollment API (multi-angle)
 # ---------------------------------------------------------
+@app.route("/api/students/<prn>/reset_enrollment", methods=["POST"])
+def reset_student_enrollment(prn):
+    db = load_students_db()
+    if prn not in db:
+        return jsonify({"success": False, "message": "Student not found"}), 404
+    
+    db[prn]["encodings"] = {}
+    db[prn]["photos"] = {}
+    db[prn]["photo"] = ""
+    db[prn]["face_setup_complete"] = False
+    save_students_db(db)
+    
+    return jsonify({"success": True})
+
 @app.route("/api/students/<prn>/capture", methods=["POST"])
 def capture_face_angle(prn):
     db = load_students_db()
@@ -503,13 +728,23 @@ def scan_attendance():
     # Use the largest face if multiple appear
     faces.sort(key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), reverse=True)
     query = faces[0].embedding
+    branches = data.get("branches", [])
+    divisions = data.get("divisions", [])
+    semesters = data.get("semesters", [])
+    classes = data.get("classes", [])
 
     db = load_students_db()
     known, meta = [], []
     for prn, s in db.items():
+        if not student_matches_selection(s, classes=classes, branches=branches, divisions=divisions, semesters=semesters):
+            continue
+
         for _angle, enc in s.get("encodings", {}).items():
             known.append(np.array(enc, dtype=np.float32))
             meta.append(s)
+
+    if not known:
+        return jsonify({"recognized": False, "message": "No students found in the selected classes."})
 
     idx, score = engine().best_match(query, known)
     if idx is not None:
@@ -575,6 +810,7 @@ def attendance_today():
             "date": doc.get("date"),
             "time": doc.get("time"),
             "snapshot": doc.get("snapshot", "") or "",
+            "status": doc.get("status", "present"),
         })
     return jsonify(records)
 
@@ -593,7 +829,11 @@ def attendance_sessions():
         key = (sess, date)
         if key not in buckets:
             buckets[key] = {"session": sess, "date": date, "count": 0, "first_time": time_s, "last_time": time_s}
-        buckets[key]["count"] += 1
+        
+        # Only increment count if present
+        if doc.get("status", "present") == "present":
+            buckets[key]["count"] += 1
+            
         if time_s > buckets[key]["last_time"]:
             buckets[key]["last_time"] = time_s
         if time_s < buckets[key]["first_time"]:
@@ -755,6 +995,7 @@ def cctv_start():
     classroom = (data.get("classroom") or data.get("camera_name") or "").strip()
     rtsp_url = (data.get("rtsp_url") or "").strip()
     camera_name = (data.get("camera_name") or "").strip()
+    division = (data.get("division") or "").strip()
 
     # Resolve classroom → RTSP automatically
     if classroom and not rtsp_url:
@@ -786,6 +1027,11 @@ def cctv_start():
             "message": "Session name (subject) is required — e.g. DBMS Lecture, Python Lab."
         }), 400
 
+    branches = data.get("branches", [])
+    divisions = data.get("divisions", [])
+    semesters = data.get("semesters", [])
+    classes = data.get("classes", [])
+
     sid, message = sessions.start(
         rtsp_url,
         duration,
@@ -793,9 +1039,40 @@ def cctv_start():
         camera_name=camera_name or classroom,
         classroom=classroom,
         teacher=teacher,
+        branches=branches,
+        divisions=divisions,
+        semesters=semesters,
+        classes=classes
     )
     if not sid:
         return jsonify({"success": False, "message": message})
+        
+    # Mark default absent if criteria provided
+    if classes or branches or divisions or semesters:
+        db = get_db()
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        query = build_student_selection_query(classes=classes, branches=branches, divisions=divisions, semesters=semesters)
+        students = list(db.students.find(query))
+        inserted = 0
+        for s in students:
+            existing = db.attendance.find_one({"prn": str(s["prn"]), "session": session_name, "date": today})
+            if not existing:
+                db.attendance.insert_one({
+                    "session": session_name,
+                    "prn": str(s["prn"]),
+                    "roll_no": s.get("roll_no", ""),
+                    "name": s.get("name", ""),
+                    "division": s.get("division", ""),
+                    "branch": s.get("branch", ""),
+                    "date": today,
+                    "time": "--:--",
+                    "snapshot": "",
+                    "status": "absent"
+                })
+                inserted += 1
+        message += f" Marked {inserted} students absent initially."
+
     return jsonify({
         "success": True,
         "message": message,
@@ -803,7 +1080,6 @@ def cctv_start():
         "classroom": classroom,
         "session_name": session_name,
     })
-
 
 @app.route("/api/cctv/stop", methods=["POST"])
 def cctv_stop():
@@ -848,6 +1124,302 @@ def cctv_preview():
         jpeg = buf.tobytes() if ok else b""
     return Response(jpeg, mimetype="image/jpeg",
                     headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+
+
+
+
+# ---------------------------------------------------------
+# Admin: Attendance Requests API
+# ---------------------------------------------------------
+@app.route("/api/attendance/requests", methods=["GET"])
+def get_attendance_requests():
+    db = get_db()
+    reqs = list(db.attendance_requests.find({}).sort("created_at", -1))
+    for r in reqs:
+        r["_id"] = str(r["_id"])
+    return jsonify(reqs)
+
+
+@app.route("/api/attendance/requests/<req_id>/review", methods=["POST"])
+def review_attendance_request(req_id):
+    from bson.objectid import ObjectId
+    db = get_db()
+    data = request.json
+    status = data.get("status")
+    if status not in ["approved", "rejected"]:
+        return jsonify({"success": False, "message": "Invalid status"}), 400
+
+    req = db.attendance_requests.find_one({"_id": ObjectId(req_id)})
+    if not req:
+        return jsonify({"success": False, "message": "Request not found"}), 404
+
+    db.attendance_requests.update_one(
+        {"_id": ObjectId(req_id)},
+        {"$set": {
+            "status": status,
+            "reviewed_at": datetime.now().isoformat(),
+            "reviewed_by": "admin"
+        }}
+    )
+
+    # Auto mark attendance if approved
+    if status == "approved":
+        student = db.students.find_one({"prn": req["prn"]})
+        if student:
+            mark_attendance(
+                student,
+                session_name=req["session"],
+                snapshot_b64=""
+            )
+
+    return jsonify({"success": True, "message": f"Request {status}"})
+
+@app.route("/api/attendance/requests/<req_id>/verify", methods=["POST"])
+def verify_attendance_request(req_id):
+    from bson.objectid import ObjectId
+    db = get_db()
+    data = request.json or {}
+    b64_image = data.get("image", "")
+
+    req = db.attendance_requests.find_one({"_id": ObjectId(req_id)})
+    if not req:
+        return jsonify({"success": False, "message": "Request not found"}), 404
+
+    student = db.students.find_one({"prn": str(req["prn"])})
+    if not student:
+        return jsonify({"success": False, "message": "Student record not found"}), 404
+
+    # If image is provided, verify against student's enrolled face
+    if b64_image:
+        try:
+            rgb_frame = decode_base64_image(b64_image if b64_image.startswith("data:") else f"data:image/jpeg;base64,{b64_image}")
+            bgr = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
+            faces = engine().detect_and_embed(bgr)
+            if not faces:
+                return jsonify({"success": False, "message": "No face detected in camera frame. Please look directly at the camera."}), 400
+
+            faces.sort(key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), reverse=True)
+            query = faces[0].embedding
+
+            known = []
+            for angle, enc in student.get("encodings", {}).items():
+                known.append(np.array(enc, dtype=np.float32))
+
+            if not known:
+                return jsonify({"success": False, "message": "Student has no registered face encodings to match against."}), 400
+
+            idx, score = engine().best_match(query, known)
+            if idx is None:
+                return jsonify({"success": False, "message": f"Face does not match {student.get('name')}. Verification failed."}), 400
+
+        except Exception as e:
+            return jsonify({"success": False, "message": f"Face processing error: {str(e)}"}), 400
+
+    # Approved (either verified by face or approved manually by admin)
+    db.attendance_requests.update_one(
+        {"_id": ObjectId(req_id)},
+        {"$set": {
+            "status": "approved",
+            "reviewed_at": datetime.now().isoformat(),
+            "reviewed_by": "admin_face_verify" if b64_image else "admin_manual"
+        }}
+    )
+
+    mark_attendance(
+        student,
+        session_name=req.get("session", "Lecture"),
+        snapshot_b64=b64_image if b64_image else student.get("photo", ""),
+        date_str=req.get("date")
+    )
+
+    return jsonify({"success": True, "message": f"Request approved and attendance marked present for {student.get('name')}!"})
+
+
+# ---------------------------------------------------------
+# Student Portal APIs (Require Student Auth)
+# ---------------------------------------------------------
+@app.route("/api/student/link", methods=["POST"])
+@require_student_auth
+def student_link():
+    # Middleware already links and populates g.student
+    return jsonify({
+        "success": True,
+        "message": "Account linked successfully",
+        "student": {
+            "prn": g.student["prn"],
+            "name": g.student["name"],
+        }
+    })
+
+
+@app.route("/api/student/profile", methods=["GET"])
+@require_student_auth
+def get_student_profile():
+    s = g.student
+    return jsonify({
+        "prn": s["prn"],
+        "roll_no": s["roll_no"],
+        "name": s["name"],
+        "email": s.get("email", ""),
+        "phone": s.get("phone", ""),
+        "division": s.get("division", ""),
+        "branch": s.get("branch", ""),
+        "semester": s.get("semester", ""),
+        "academic_year": s.get("academic_year", ""),
+        "photos": s.get("photos", {}),
+        "photo": s.get("photo", "") or s.get("photos", {}).get("center", ""),
+    })
+
+
+@app.route("/api/student/attendance", methods=["GET"])
+@require_student_auth
+def get_student_attendance():
+    db = get_db()
+    prn = g.student["prn"]
+    query = {"prn": prn}
+    
+    date_filter = request.args.get("date")
+    if date_filter:
+        query["date"] = date_filter
+        
+    records = list(db.attendance.find(query).sort([("date", -1), ("time", -1)]))
+    for r in records:
+        r["_id"] = str(r["_id"])
+    return jsonify(records)
+
+
+@app.route("/api/student/attendance/summary", methods=["GET"])
+@require_student_auth
+def get_student_attendance_summary():
+    db = get_db()
+    prn = g.student["prn"]
+    
+    records = list(db.attendance.find({"prn": prn}))
+    
+    total_attended = sum(1 for r in records if r.get("status", "present") == "present")
+    total_absent = sum(1 for r in records if r.get("status") == "absent")
+    
+    subjects = {}
+    for r in records:
+        sess = r.get("session")
+        if sess not in subjects:
+            subjects[sess] = {"present": 0, "total": 0}
+        subjects[sess]["total"] += 1
+        if r.get("status", "present") == "present":
+            subjects[sess]["present"] += 1
+        
+    return jsonify({
+        "total_attended": total_attended,
+        "total_absent": total_absent,
+        "subject_breakdown": subjects
+    })
+
+
+@app.route("/api/admin/session/start", methods=["POST"])
+def admin_start_session():
+    """
+    Called when admin starts a session for a specific division.
+    Marks all students in that division as 'absent' for this session/date.
+    """
+    db = get_db()
+    data = request.json
+    session_name = (data.get("session") or "").strip()
+    branches = data.get("branches", [])
+    divisions = data.get("divisions", [])
+    semesters = data.get("semesters", [])
+    classes = data.get("classes", [])
+    
+    if not session_name:
+        return jsonify({"success": False, "message": "Session name is required"}), 400
+        
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # 1. Get all students matching criteria
+    query = build_student_selection_query(classes=classes, branches=branches, divisions=divisions, semesters=semesters)
+    students = list(db.students.find(query))
+    if not students:
+        return jsonify({"success": False, "message": "No students found matching those criteria"}), 404
+        
+    # 2. Mark them absent if no record exists for today/session
+    inserted = 0
+    for s in students:
+        existing = db.attendance.find_one({
+            "prn": str(s["prn"]),
+            "session": session_name,
+            "date": today
+        })
+        if not existing:
+            db.attendance.insert_one({
+                "session": session_name,
+                "prn": str(s["prn"]),
+                "roll_no": s.get("roll_no", ""),
+                "name": s.get("name", ""),
+                "division": s.get("division", ""),
+                "branch": s.get("branch", ""),
+                "date": today,
+                "time": "--:--",
+                "snapshot": "",
+                "status": "absent"
+            })
+            inserted += 1
+            
+    return jsonify({
+        "success": True, 
+        "message": f"Session started. Marked {inserted} students absent initially."
+    })
+
+
+
+@app.route("/api/student/attendance/request", methods=["POST"])
+@require_student_auth
+def create_attendance_request():
+    db = get_db()
+    prn = g.student["prn"]
+    data = request.json
+    
+    session_name = (data.get("session") or "").strip()
+    date = (data.get("date") or "").strip()
+    reason = (data.get("reason") or "").strip()
+    
+    if not session_name or not date or not reason:
+        return jsonify({"success": False, "message": "Missing fields"}), 400
+        
+    # Check if already requested or present
+    existing_req = db.attendance_requests.find_one({"prn": prn, "session": session_name, "date": date})
+    if existing_req:
+        return jsonify({"success": False, "message": "Request already submitted for this session/date"}), 400
+        
+    existing_att = db.attendance.find_one({"prn": prn, "session": session_name, "date": date})
+    if existing_att and existing_att.get("status", "present") == "present":
+        return jsonify({"success": False, "message": "You are already marked present for this session/date"}), 400
+        
+    db.attendance_requests.insert_one({
+        "prn": prn,
+        "student_name": g.student["name"],
+        "session": session_name,
+        "date": date,
+        "reason": reason,
+        "status": "pending",
+        "created_at": datetime.now().isoformat()
+    })
+    
+    return jsonify({"success": True, "message": "Attendance request submitted"})
+
+
+@app.route("/api/student/attendance/requests", methods=["GET"])
+@require_student_auth
+def get_my_attendance_requests():
+    db = get_db()
+    prn = g.student["prn"]
+    reqs = list(db.attendance_requests.find({"prn": prn}).sort("created_at", -1))
+    for r in reqs:
+        r["_id"] = str(r["_id"])
+    return jsonify(reqs)
+
+
+@app.route("/api/firebase/config", methods=["GET"])
+def firebase_config():
+    return jsonify(get_firebase_config())
 
 
 

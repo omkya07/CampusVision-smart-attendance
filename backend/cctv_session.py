@@ -248,7 +248,43 @@ class CCTVSession:
         known, meta = [], []
         if recognize:
             db = self._load_students_db()
+            classes = getattr(self, "classes", [])
+            branches = getattr(self, "branches", [])
+            divisions = getattr(self, "divisions", [])
+            semesters = getattr(self, "semesters", [])
             for prn, s in db.items():
+                if classes:
+                    matched = False
+                    s_branch = (s.get("branch") or "").strip().lower()
+                    s_div = (s.get("division") or "").strip().upper()
+                    s_sem = (s.get("semester") or "").strip().upper()
+                    for c in classes:
+                        if isinstance(c, dict):
+                            req_br = (c.get("branch") or "").strip().lower()
+                            req_div = (c.get("division") or "").strip().upper()
+                            req_sems = [str(x).upper() for x in c.get("semesters", [])]
+                            if req_br and req_br != s_branch:
+                                continue
+                            if req_div and req_div != s_div:
+                                continue
+                            if req_sems and s_sem not in req_sems:
+                                continue
+                            matched = True
+                            break
+                        elif isinstance(c, str):
+                            parts = c.split("_")
+                            if len(parts) >= 3 and parts[2].upper() == s_div and parts[0].lower() in s_branch:
+                                matched = True
+                                break
+                    if not matched:
+                        continue
+                else:
+                    if branches and s.get("branch") not in branches:
+                        continue
+                    if divisions and s.get("division") not in divisions:
+                        continue
+                    if semesters and s.get("semester") not in semesters:
+                        continue
                 for _a, enc in s.get("encodings", {}).items():
                     known.append(np.array(enc, dtype=np.float32))
                     meta.append((prn, s))

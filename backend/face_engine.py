@@ -155,19 +155,10 @@ class FaceEngine:
                     print(f"[FaceEngine] Two-stage person model unavailable ({e}); using tile/upscale only")
             return
         except Exception as e:
-            print(f"[FaceEngine] InsightFace unavailable ({e}); falling back to dlib.")
-
-        try:
-            import face_recognition  # noqa: F401
-            self.backend = "dlib"
-            self.model_name = MODEL_NAME_DLIB
-            self.using_gpu = False
-            self._person_model = None
-            print("[FaceEngine] Using face_recognition / dlib (128-d)")
-        except Exception as e:
+            print(f"[FaceEngine] InsightFace unavailable ({e});")
             raise RuntimeError(
-                f"No face recognition backend available. Install insightface+onnxruntime "
-                f"or face_recognition. Last error: {e}"
+                f"InsightFace is permanently required. Please ensure insightface+onnxruntime are installed. "
+                f"Error: {e}"
             )
 
     def detect_and_embed(self, bgr_image: np.ndarray) -> List[DetectedFace]:

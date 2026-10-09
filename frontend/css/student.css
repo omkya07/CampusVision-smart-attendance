@@ -1,0 +1,383 @@
+/* Vmedulife-inspired Student Portal Theme */
+:root {
+  --v-blue: #3258c2;
+  --v-blue-light: #eef1fc;
+  --v-green: #379c4a;
+  --v-green-light: #eef8ee;
+  --v-orange: #f28b24;
+  --v-orange-light: #fef4ea;
+  --v-bg: #f4f6f8;
+  --v-surface: #ffffff;
+  --v-text: #212529;
+  --v-muted: #6c757d;
+  --v-border: #e3e6e8;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  overflow: hidden;
+}
+body.student-theme {
+  background-color: var(--v-bg);
+  color: var(--v-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  display: flex;
+  justify-content: center;
+  position: fixed;
+  inset: 0;
+}
+
+/* Responsive App Container */
+.app-container {
+  width: 100%;
+  max-width: 800px;
+  height: 100%;
+  background-color: var(--v-bg);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 20px rgba(0,0,0,0.05);
+  overflow: hidden;
+}
+
+/* Tablet & Desktop Layout Tweaks */
+@media (min-width: 768px) {
+  .v-modules-scroll, .v-course-top-tabs {
+    justify-content: center;
+  }
+  .v-profile-banner {
+    border-radius: 16px;
+    margin: 16px;
+  }
+  .v-dept-info {
+    margin: 0 16px;
+    border-radius: 12px;
+    border: 1px solid var(--v-border);
+  }
+}
+
+/* Auth Screen */
+#authScreen {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--v-surface); z-index: 1000;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.v-logo {
+  color: var(--v-blue); font-size: 28px; font-weight: 700; margin-bottom: 24px;
+}
+
+/* Topbar */
+.v-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: max(16px, env(safe-area-inset-top)) 20px 16px;
+  background: var(--v-surface);
+  border-bottom: 1px solid var(--v-border);
+  z-index: 10;
+}
+.v-topbar-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #1a1a1a;
+  flex: 1;
+  text-align: center;
+}
+.v-back-btn, .v-icon-btn {
+  background: none; border: none; padding: 0; cursor: pointer; color: #1a1a1a; outline: none !important;
+  display: flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+}
+.v-back-btn { opacity: 0; pointer-events: none; }
+
+/* Scrollable Content */
+.v-content {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 80px; 
+  background-color: var(--v-surface);
+}
+
+/* Home Header 1 (White part) */
+.v-home-header-top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: max(16px, env(safe-area-inset-top)) 20px 16px; background: var(--v-surface);
+}
+.v-home-hi { font-size: 20px; font-weight: 800; color: var(--v-blue); text-transform: uppercase; }
+
+/* College Name Banner */
+.v-home-college {
+  background: #f4f4f9; display: flex; align-items: center; gap: 12px; padding: 16px;
+  border-top: 1px solid var(--v-border);
+}
+.v-home-college-icon {
+  width: 44px; height: 44px; background: white; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; color: #666;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.05); flex-shrink: 0;
+}
+.v-home-college-text { font-size: 13px; font-weight: 700; color: #4a4a4a; line-height: 1.3; }
+
+/* Profile Banner (Blue) */
+.v-profile-banner {
+  background: linear-gradient(135deg, #6b84eb, #4963d6);
+  padding: 20px; display: flex; align-items: center; gap: 16px; color: white;
+}
+.v-avatar {
+  width: 76px; height: 76px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.2);
+  background: #ccc; object-fit: cover; flex-shrink: 0;
+}
+.v-profile-info h2 { margin: 0 0 6px 0; font-size: 17px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px;}
+.v-profile-info p { margin: 0; font-size: 13px; opacity: 0.9; font-weight: 500;}
+.v-badge-year {
+  background: white; color: var(--v-blue); padding: 4px 10px; border-radius: 6px;
+  font-size: 11px; font-weight: 800; display: inline-block; margin-top: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Dept Info */
+.v-dept-info {
+  display: flex; justify-content: space-between; padding: 16px 20px;
+  background: var(--v-surface); border-bottom: 1px solid var(--v-border);
+}
+.v-dept-col { flex: 1; }
+.v-dept-label { font-size: 12px; color: var(--v-muted); margin-bottom: 4px; font-weight: 600;}
+.v-dept-val { font-size: 13px; font-weight: 700; color: #1a1a1a;}
+
+/* Modules */
+.v-section-title {
+  padding: 20px 20px 12px; font-size: 18px; font-weight: 800; color: #1a1a1a;
+}
+.v-modules-scroll {
+  display: flex; gap: 16px; padding: 0 20px 20px; overflow-x: auto;
+}
+.v-modules-scroll::-webkit-scrollbar { display: none; }
+.v-module-card {
+  min-width: 110px; background: var(--v-surface); padding: 20px 12px;
+  border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; cursor: pointer; border: 1px solid var(--v-border); outline: none !important;
+  flex-shrink: 0;
+}
+.v-module-card svg { color: var(--v-blue); margin-bottom: 12px; }
+.v-module-card span { font-size: 12px; font-weight: 700; color: #1a1a1a; line-height: 1.3; }
+
+/* Date Scroller (Academic Planning) */
+.v-date-scroller {
+  display: flex; gap: 4px; padding: 12px 16px; overflow-x: auto;
+  background: var(--v-surface); border-bottom: 1px solid var(--v-border);
+  width: 100%; box-sizing: border-box;
+}
+.v-date-scroller::-webkit-scrollbar { display: none; }
+.v-date-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 52px; padding: 10px 4px; border-radius: 12px; cursor: pointer; outline: none !important;
+}
+.v-date-item.active { background: var(--v-blue-light); color: var(--v-blue); }
+.v-date-item:not(.active) { color: #1a1a1a; }
+.v-date-day { font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 6px; }
+.v-date-num { font-size: 17px; font-weight: 800; }
+
+/* Lecture Cards */
+.v-lectures-list { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.v-lecture-card {
+  border-radius: 16px; padding: 16px; position: relative;
+}
+.v-lecture-card.present { background: var(--v-green-light); border: 1px solid #cbe9d1; }
+.v-lecture-card.absent { background: #ffe3e3; border: 1px solid #ffc9c9; }
+.v-lecture-card.pending { background: var(--v-orange-light); border: 1px solid #fbe4ce; }
+
+.v-lec-header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px; }
+.v-lec-time { color: #333; font-weight: 500; }
+.v-lec-status { font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.v-lecture-card.present .v-lec-status { color: var(--v-green); }
+.v-lecture-card.absent .v-lec-status { color: #e03131; }
+.v-lecture-card.pending .v-lec-status { color: var(--v-orange); }
+
+.v-lec-subject { font-size: 16px; font-weight: 800; margin: 0 0 6px 0; }
+.v-lecture-card.present .v-lec-subject { color: var(--v-green); }
+.v-lecture-card.absent .v-lec-subject { color: #e03131; }
+.v-lecture-card.pending .v-lec-subject { color: var(--v-orange); }
+
+.v-lec-code { font-size: 12px; color: #1a1a1a; margin-bottom: 10px; font-weight: 500;}
+.v-lec-prof { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: #1a1a1a;}
+.v-lec-type { font-size: 12px; font-weight: 700; color: #1a1a1a; display: flex; align-items: center; gap: 6px;}
+
+/* Courses View */
+.v-courses-view { padding: 0; background: var(--v-bg); min-height: 100%;}
+.v-course-top-tabs {
+  display: flex; overflow-x: auto; padding: 12px 16px 0; background: var(--v-surface);
+  border-bottom: 1px solid var(--v-border); gap: 20px;
+}
+.v-course-top-tabs::-webkit-scrollbar { display: none; }
+.v-ct-tab {
+  padding: 0 0 12px 0; font-size: 13px; font-weight: 700; color: var(--v-muted);
+  white-space: nowrap; cursor: pointer; border-bottom: 2px solid transparent;
+}
+.v-ct-tab.active { color: var(--v-blue); border-bottom-color: var(--v-blue); }
+
+.v-chart-container {
+  display: flex; align-items: center; padding: 24px 20px; gap: 24px;
+  background: var(--v-surface); border-bottom: 1px solid var(--v-border);
+}
+.v-donut {
+  width: 100px; height: 100px; border-radius: 50%; flex-shrink: 0;
+  background: conic-gradient(var(--v-blue) 0% var(--v-chart-pct, 0%), var(--v-orange) var(--v-chart-pct, 0%) 100%);
+  position: relative;
+}
+.v-donut::after {
+  content: ""; position: absolute; top: 18px; left: 18px; right: 18px; bottom: 18px;
+  background: var(--v-surface); border-radius: 50%;
+}
+.v-chart-stats h3 { margin: 0 0 6px 0; font-size: 16px; font-weight: 800; color: #4459c9;}
+.v-chart-stats p { margin: 0 0 12px 0; font-size: 12px; color: #1a1a1a; font-weight: 700;}
+.v-stat-row { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; margin-bottom:6px; color: var(--v-muted);}
+.v-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;}
+
+.v-course-list-wrap { padding: 16px; }
+.v-course-list-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding: 0 4px;
+}
+.v-cl-title { font-size: 13px; color: var(--v-muted); font-weight: 600; }
+.v-cl-action { font-size: 13px; color: var(--v-blue); font-weight: 700; cursor: pointer; display:flex; align-items:center; gap:6px;}
+
+.v-course-card {
+  background: var(--v-surface); border-radius: 12px; padding: 16px;
+  margin-bottom: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.03); 
+  border: 1px solid var(--v-border); cursor: pointer; outline: none !important;
+}
+.v-course-card h4 { margin: 0 0 10px 0; font-size: 15px; color: #4459c9; font-weight: 800; line-height: 1.3;}
+.v-course-meta { font-size: 13px; color: var(--v-muted); margin-bottom: 12px; display: flex; align-items: center; gap:8px; font-weight:600;}
+.v-course-att { font-size: 13px; font-weight: 700; color: var(--v-muted); display: flex; align-items: center; gap:8px; }
+
+/* Request Form */
+.v-form-group { margin-bottom: 16px; }
+.v-form-group label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+.v-form-group input, .v-form-group select {
+  width: 100%; padding: 12px; border: 1px solid var(--v-border); border-radius: 8px;
+  font-size: 14px; background: var(--v-surface); outline:none; box-sizing: border-box;
+}
+.v-btn {
+  width: 100%; padding: 14px; background: var(--v-blue); color: white;
+  border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; outline:none;
+}
+
+/* Bottom Nav */
+.v-bottom-nav {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: var(--v-surface);
+  display: flex; justify-content: space-around;
+  padding: 12px 0 24px;
+  border-top: 1px solid var(--v-border);
+  z-index: 20;
+}
+.v-nav-item {
+  display: flex; flex-direction: column; align-items: center;
+  color: #a0a0a0; font-size: 11px; font-weight: 700;
+  background: none; border: none; cursor: pointer; outline: none !important;
+  flex: 1; gap: 6px;
+}
+.v-nav-item svg { stroke-width: 2.5; width: 22px; height: 22px; }
+.v-nav-item.active { color: var(--v-blue); }
+
+.hidden { display: none !important; }
+
+/* About Institute Page Styles */
+.v-about-hero {
+  position: relative;
+  width: 100%;
+  border-radius: 0 0 16px 16px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+}
+.v-about-hero img {
+  width: 100%;
+  height: 200px;
+  object-fit: cover;
+  display: block;
+}
+.v-about-hero-overlay {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  padding: 16px;
+  background: linear-gradient(to top, rgba(11, 23, 56, 0.95), rgba(11, 23, 56, 0.6) 60%, transparent);
+  color: white;
+}
+.v-about-hero-badge {
+  display: inline-block;
+  background: var(--v-blue);
+  color: white;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.v-about-hero-title {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.25;
+  margin: 0;
+  color: #ffffff;
+}
+.v-about-card {
+  background: var(--v-surface);
+  border-radius: 14px;
+  padding: 16px;
+  margin: 16px;
+  border: 1px solid var(--v-border);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+.v-about-card h3 {
+  margin: 0 0 10px 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #1a1a1a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.v-about-badge-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+.v-about-pill {
+  background: var(--v-blue-light);
+  color: var(--v-blue);
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.v-contact-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--v-border);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.v-contact-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.v-contact-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--v-blue-light);
+  color: var(--v-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}

@@ -82,9 +82,13 @@ def _ensure_indexes(db):
 
     indexes = [
         ("students", "prn", {"unique": True}),
+        ("students", "email", {"unique": True, "sparse": True}),
+        ("students", "firebase_uid", {"unique": True, "sparse": True}),
         ("attendance", [("prn", 1), ("session", 1), ("date", 1)], {}),
         ("attendance", "date", {}),
         ("classrooms", "id", {"unique": True}),
+        ("attendance_requests", [("prn", 1), ("date", 1), ("session", 1)], {}),
+        ("attendance_requests", "status", {}),
     ]
 
     for coll_name, keys, kwargs in indexes:

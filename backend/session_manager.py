@@ -54,6 +54,10 @@ class SessionManager:
         camera_name: str = "",
         classroom: str = "",
         teacher: str = "",
+        branches: list = None,
+        divisions: list = None,
+        semesters: list = None,
+        classes: list = None,
     ):
         with self._lock:
             self._prune_finished()
@@ -70,6 +74,10 @@ class SessionManager:
             worker.session_id = sid
             worker.classroom = classroom
             worker.teacher = teacher
+            worker.branches = branches or []
+            worker.divisions = divisions or []
+            worker.semesters = semesters or []
+            worker.classes = classes or []
 
             ok, msg = worker.start(
                 rtsp_url,

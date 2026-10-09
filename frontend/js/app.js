@@ -17,7 +17,7 @@ document.querySelectorAll(".nav-btn").forEach(btn => {
 
     if (btn.dataset.view === "students") loadStudents();
     if (btn.dataset.view === "enroll") loadStudentSelect();
-    if (btn.dataset.view === "attendance") { loadToday(); startAttendCamera(); }
+    if (btn.dataset.view === "attendance") { loadToday(); startAttendCamera(); populateManualSessionDropdowns(); }
     if (btn.dataset.view === "cameras") loadCameras();
     if (btn.dataset.view === "cctv") { fillCctvCameraSelect(); }
     if (btn.dataset.view === "sessions") loadSessionsPage();
@@ -30,6 +30,10 @@ async function registerStudent() {
     prn: document.getElementById("prn").value,
     roll_no: document.getElementById("roll_no").value,
     name: document.getElementById("name").value,
+    email: document.getElementById("email").value,
+    phone: document.getElementById("phone").value,
+    academic_year: document.getElementById("academic_year").value,
+    semester: document.getElementById("semester").value,
     division: document.getElementById("division").value,
     branch: document.getElementById("branch").value,
   };
@@ -42,7 +46,7 @@ async function registerStudent() {
   msg.textContent = data.message;
   msg.className = "status-msg " + (data.success ? "success" : "error");
   if (data.success) {
-    ["prn","roll_no","name","division","branch"].forEach(id => document.getElementById(id).value = "");
+    ["prn","roll_no","name","email","phone","academic_year","semester","division","branch"].forEach(id => document.getElementById(id).value = "");
     loadStudents();
   }
 }
@@ -54,15 +58,85 @@ function getInitials(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+async function handleCsvUpload(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append("csv_file", file);
+  
+  const msg = document.getElementById("registerMsg");
+  const progContainer = document.getElementById("uploadProgressContainer");
+  const progBar = document.getElementById("uploadProgressBar");
+  
+  msg.textContent = "Uploading CSV...";
+  msg.className = "status-msg";
+  progContainer.style.display = "block";
+  progBar.style.width = "0%";
+  
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `${API}/api/students_upload`);
+  
+  xhr.upload.onprogress = (event) => {
+    if (event.lengthComputable) {
+      const percent = (event.loaded / event.total) * 100;
+      progBar.style.width = percent + "%";
+    }
+  };
+  
+  xhr.onload = () => {
+    let data;
+    try { data = JSON.parse(xhr.responseText); } catch(err) { data = {success: false, message: "Server error"}; }
+    
+    progContainer.style.display = "none";
+    msg.textContent = data.message;
+    msg.className = "status-msg " + (data.success ? "success" : "error");
+    if (data.success) {
+      e.target.value = ''; // reset file input
+      loadStudents();
+    }
+  };
+  
+  xhr.onerror = () => {
+    progContainer.style.display = "none";
+    msg.textContent = "Upload failed due to network error.";
+    msg.className = "status-msg error";
+  };
+  
+  xhr.send(formData);
+}
+
 async function loadStudents() {
   const res = await fetch(`${API}/api/students`);
   const students = await res.json();
   const body = document.getElementById("studentTableBody");
-  if (!students.length) {
-    body.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:24px; color:var(--muted);">No students registered yet. Add one above.</td></tr>`;
+  
+  // Populate filters
+  const branchSelect = document.getElementById("filterBranch");
+  const divSelect = document.getElementById("filterDivision");
+  
+  const currentBranch = branchSelect.value;
+  const currentDiv = divSelect.value;
+  
+  const branches = [...new Set(students.map(s => (s.branch || "").trim()).filter(Boolean))].sort();
+  const divisions = [...new Set(students.map(s => (s.division || "").trim()).filter(Boolean))].sort();
+  
+  branchSelect.innerHTML = `<option value="">All Branches</option>` + branches.map(b => `<option value="${b}">${b}</option>`).join("");
+  divSelect.innerHTML = `<option value="">All Divisions</option>` + divisions.map(d => `<option value="${d}">${d}</option>`).join("");
+  
+  branchSelect.value = currentBranch;
+  divSelect.value = currentDiv;
+  
+  const filteredStudents = students.filter(s => {
+    const bMatch = !currentBranch || (s.branch || "").trim() === currentBranch;
+    const dMatch = !currentDiv || (s.division || "").trim() === currentDiv;
+    return bMatch && dMatch;
+  });
+  
+  if (!filteredStudents.length) {
+    body.innerHTML = `<tr><td colspan="9" style="text-align:center; padding:24px; color:var(--muted);">No students match criteria.</td></tr>`;
     return;
   }
-  body.innerHTML = students.map(s => {
+  body.innerHTML = filteredStudents.map(s => {
     const avatar = s.photo
       ? `<img src="${s.photo}" class="student-avatar has-photo" alt="${s.name}" title="Click to view full photo" onclick="openImageModal('${s.photo}', '${s.name}')">`
       : `<div class="avatar-placeholder" title="No photo">${getInitials(s.name)}</div>`;
@@ -70,9 +144,10 @@ async function loadStudents() {
       <tr>
         <td style="width:48px;">${avatar}</td>
         <td>${s.prn}</td><td>${s.roll_no}</td><td><strong>${s.name}</strong></td>
+        <td>${s.email || `<span class="muted-inline">Not set</span>`}</td>
         <td>${s.division}</td><td>${s.branch}</td>
         <td><span class="badge ${s.face_setup_complete ? 'done' : 'pending'}">
-          ${s.face_setup_complete ? 'Complete' : s.angles_done.length + '/3 angles'}
+          ${s.face_setup_complete ? 'Complete' : (s.angles_done ? s.angles_done.length : 0) + '/3 angles'}
         </span></td>
         <td><button class="btn secondary btn-sm" onclick="deleteStudent('${s.prn}')">Remove</button></td>
       </tr>`;
@@ -88,8 +163,30 @@ async function deleteStudent(prn) {
 async function loadStudentSelect() {
   const res = await fetch(`${API}/api/students`);
   const students = await res.json();
+  
+  const branchSelect = document.getElementById("enrollFilterBranch");
+  const divSelect = document.getElementById("enrollFilterDivision");
+  
+  const currentBranch = branchSelect.value;
+  const currentDiv = divSelect.value;
+  
+  const branches = [...new Set(students.map(s => (s.branch || "").trim()).filter(Boolean))].sort();
+  const divisions = [...new Set(students.map(s => (s.division || "").trim()).filter(Boolean))].sort();
+  
+  branchSelect.innerHTML = `<option value="">All Branches</option>` + branches.map(b => `<option value="${b}">${b}</option>`).join("");
+  divSelect.innerHTML = `<option value="">All Divisions</option>` + divisions.map(d => `<option value="${d}">${d}</option>`).join("");
+  
+  branchSelect.value = currentBranch;
+  divSelect.value = currentDiv;
+  
+  const filteredStudents = students.filter(s => {
+    const bMatch = !currentBranch || (s.branch || "").trim() === currentBranch;
+    const dMatch = !currentDiv || (s.division || "").trim() === currentDiv;
+    return bMatch && dMatch;
+  });
+
   const select = document.getElementById("studentSelect");
-  select.innerHTML = students.map(s =>
+  select.innerHTML = filteredStudents.map(s =>
     `<option value="${s.prn}">${s.name} (Roll No ${s.roll_no}) ${s.face_setup_complete ? '✓' : ''}</option>`
   ).join("");
 }
@@ -160,6 +257,8 @@ async function loadPoseModels() {
 async function startEnrollment() {
   currentPrn = document.getElementById("studentSelect").value;
   if (!currentPrn) return;
+
+  await fetch(`${API}/api/students/${currentPrn}/reset_enrollment`, { method: "POST" });
 
   const res = await fetch(`${API}/api/angles`);
   ANGLES = await res.json();
@@ -399,18 +498,304 @@ async function startAttendCamera() {
 async function loadToday() {
   const res = await fetch(`${API}/api/attendance/today`);
   const records = await res.json();
-  document.getElementById("todayTableBody").innerHTML = records.map(r => `
-    <tr>
-      <td>${r.session || "—"}</td>
-      <td>${r.roll_no}</td>
-      <td>${r.name}</td>
-      <td>${r.division}</td>
-      <td>${r.time}</td>
-    </tr>
-  `).join("");
+  document.getElementById("todayTableBody").innerHTML = records.map(r => {
+    const isAbsent = r.status === "absent";
+    const timeDisplay = isAbsent ? '<span class="muted">--:--</span>' : r.time;
+    const nameDisplay = isAbsent ? `<strong>${r.name}</strong> <span class="badge error" style="font-size:0.7em;">Absent</span>` : `<strong>${r.name}</strong>`;
+    
+    return `
+      <tr ${isAbsent ? 'style="opacity: 0.7;"' : ''}>
+        <td>${r.session || "—"}</td>
+        <td>${r.roll_no}</td>
+        <td>${nameDisplay}</td>
+        <td>${r.division}</td>
+        <td>${timeDisplay}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+let allStudentsCache = [];
+
+function renderCheckboxes(arr) {
+  return arr.map(item => `<label class="checkbox-label"><input type="checkbox" value="${item}">${item}</label>`).join("");
+}
+
+function getBranchCode(branch) {
+  if (!branch) return "GEN";
+  const b = branch.toUpperCase().trim();
+  if (b.includes("MECH")) return "MECH";
+  if (b.includes("AIML") || (b.includes("AI") && b.includes("ML"))) return "CSE-AIML";
+  if (b.includes("COMPUTER") || b.includes("CSE") || b.includes("CS")) return "CSE";
+  if (b.includes("INFO") || b.includes("IT")) return "IT";
+  if (b.includes("ELECTRO") || b.includes("ENTC") || b.includes("EXTC") || b.includes("ECE")) return "ENTC";
+  if (b.includes("ELECTRI") || b.includes("EE")) return "ELECT";
+  if (b.includes("CIVIL")) return "CIVIL";
+  if (b.includes("AUTO")) return "AUTO";
+  if (b.includes("DATA") || b.includes("DS")) return "DS";
+  const words = b.split(/[\s_-]+/);
+  if (words.length > 1) return words.map(w => w[0]).join("");
+  return b.substring(0, 5);
+}
+
+function getYearCode(sem) {
+  sem = (sem || "").toUpperCase().trim();
+  if (["SEM-I", "SEM-II", "SEM-1", "SEM-2", "1", "2"].includes(sem) || sem.includes("FY") || sem.includes("FIRST")) return "FY";
+  if (["SEM-III", "SEM-IV", "SEM-3", "SEM-4", "3", "4"].includes(sem) || sem.includes("SY") || sem.includes("SECOND")) return "SY";
+  if (["SEM-V", "SEM-VI", "SEM-5", "SEM-6", "5", "6"].includes(sem) || sem.includes("TY") || sem.includes("THIRD")) return "TY";
+  if (["SEM-VII", "SEM-VIII", "SEM-7", "SEM-8", "7", "8"].includes(sem) || sem.includes("LY") || sem.includes("FINAL") || sem.includes("FOURTH")) return "LY";
+  return "GEN";
+}
+
+function getYearFullName(yearCode) {
+  switch(yearCode) {
+    case "FY": return "1st Year (FY)";
+    case "SY": return "2nd Year (SY)";
+    case "TY": return "3rd Year (TY)";
+    case "LY": return "Final Year (LY)";
+    default: return yearCode;
+  }
+}
+
+function getSemestersForYear(yearCode) {
+  switch(yearCode) {
+    case "FY": return ["SEM-I", "SEM-II", "SEM-1", "SEM-2", "1", "2"];
+    case "SY": return ["SEM-III", "SEM-IV", "SEM-3", "SEM-4", "3", "4"];
+    case "TY": return ["SEM-V", "SEM-VI", "SEM-5", "SEM-6", "5", "6"];
+    case "LY": return ["SEM-VII", "SEM-VIII", "SEM-7", "SEM-8", "7", "8"];
+    default: return [];
+  }
+}
+
+function getYearFromSemester(sem) {
+  const y = getYearCode(sem);
+  return getYearFullName(y);
+}
+
+const STANDARD_BRANCHES = [
+  "CSE", "CSE-AIML", "AIDS", "IT", "MECH", "CIVIL", "ENTC", "ELECTRICAL", "CHEM", "BIOTECH", "AUTO", "ROBOTICS"
+];
+
+class DivisionPicker {
+  constructor({ prefix, onSelectionChange }) {
+    this.prefix = prefix;
+    this.branchSelect = document.getElementById(`${prefix}PickerBranch`);
+    this.yearSelect = document.getElementById(`${prefix}PickerYear`);
+    this.divOptionsContainer = document.getElementById(`${prefix}PickerDivOptions`);
+    this.chosenCountBadge = document.getElementById(`${prefix}ChosenCount`);
+    this.chosenListContainer = document.getElementById(`${prefix}ChosenList`);
+    this.onSelectionChange = onSelectionChange;
+    this.chosenMap = new Map();
+  }
+
+  init(students) {
+    this.populateBranches(students);
+    this.renderDivOptions();
+    this.renderChosen();
+  }
+
+  populateBranches(students) {
+    if (!this.branchSelect) return;
+    const currentVal = this.branchSelect.value;
+    const foundBranches = (students || []).map(s => (s.branch || "").trim()).filter(Boolean);
+    const set = new Set([...STANDARD_BRANCHES, ...foundBranches]);
+    const branchList = Array.from(set).sort();
+
+    this.branchSelect.innerHTML = `<option value="">— Select Branch —</option>` +
+      branchList.map(b => `<option value="${b}">${b}</option>`).join("");
+
+    if (currentVal && set.has(currentVal)) {
+      this.branchSelect.value = currentVal;
+    }
+  }
+
+  onFilterChange() {
+    this.renderDivOptions();
+  }
+
+  clearFilters() {
+    if (this.branchSelect) this.branchSelect.value = "";
+    if (this.yearSelect) this.yearSelect.value = "";
+    this.renderDivOptions();
+  }
+
+  renderDivOptions() {
+    if (!this.divOptionsContainer) return;
+    const branch = this.branchSelect?.value || "";
+    const year = this.yearSelect?.value || "";
+
+    if (!branch || !year) {
+      this.divOptionsContainer.innerHTML = `
+        <span class="muted-inline" style="font-size: 12px;">Choose Branch and Year above to display divisions.</span>
+      `;
+      return;
+    }
+
+    const bCode = getBranchCode(branch);
+    const standardDivs = ["A", "B", "C"];
+    const sems = getSemestersForYear(year);
+
+    const matchingStudents = (allStudentsCache || []).filter(s => {
+      const b = (s.branch || "").trim();
+      const bMatch = b.toUpperCase() === branch.toUpperCase() || getBranchCode(b) === bCode;
+      const sem = (s.semester || "").toUpperCase().trim();
+      const yrMatch = getYearCode(sem || s.academic_year) === year || sems.includes(sem);
+      return bMatch && yrMatch;
+    });
+
+    const extraDivs = matchingStudents.map(s => (s.division || "").trim().toUpperCase()).filter(Boolean);
+    const allDivs = Array.from(new Set([...standardDivs, ...extraDivs])).sort();
+
+    this.divOptionsContainer.innerHTML = allDivs.map(div => {
+      const code = `${bCode}_${year}_${div}`;
+      const isPicked = this.chosenMap.has(code);
+      const count = matchingStudents.filter(s => (s.division || "").toUpperCase().trim() === div).length;
+      const countLabel = count > 0 ? `${count} student${count > 1 ? 's' : ''}` : `0 enrolled`;
+
+      return `
+        <button type="button" 
+                class="pick-div-btn ${isPicked ? 'picked' : ''}" 
+                onclick="${this.prefix}Picker.toggleDivision('${code}', '${branch.replace(/'/g, "\\'")}', '${bCode}', '${year}', '${div}')">
+          <span class="pick-check">${isPicked ? '✓' : '+'}</span>
+          <span><strong>Div ${div}</strong> <span style="opacity:0.75; font-size:11px;">(${countLabel})</span></span>
+        </button>
+      `;
+    }).join("");
+  }
+
+  toggleDivision(code, branch, bCode, year, div) {
+    if (this.chosenMap.has(code)) {
+      this.chosenMap.delete(code);
+    } else {
+      this.chosenMap.set(code, {
+        code: code,
+        branch: branch,
+        branchCode: bCode,
+        year: year,
+        yearName: getYearFullName(year),
+        division: div,
+        semesters: getSemestersForYear(year)
+      });
+    }
+    this.renderDivOptions();
+    this.renderChosen();
+    if (this.onSelectionChange) this.onSelectionChange(this.getChosenList());
+  }
+
+  removeChosen(code) {
+    this.chosenMap.delete(code);
+    this.renderDivOptions();
+    this.renderChosen();
+    if (this.onSelectionChange) this.onSelectionChange(this.getChosenList());
+  }
+
+  clearAllChosen() {
+    this.chosenMap.clear();
+    this.renderDivOptions();
+    this.renderChosen();
+    if (this.onSelectionChange) this.onSelectionChange(this.getChosenList());
+  }
+
+  renderChosen() {
+    const list = Array.from(this.chosenMap.values());
+    if (this.chosenCountBadge) {
+      this.chosenCountBadge.textContent = `${list.length} chosen`;
+    }
+
+    if (!this.chosenListContainer) return;
+
+    if (list.length === 0) {
+      this.chosenListContainer.innerHTML = `
+        <span class="muted-inline" style="font-size: 12px; padding: 4px 0;">
+          No divisions chosen yet. Use the filters above to pick divisions (e.g. MECH_SY_A, CSE_TY_C).
+        </span>
+      `;
+      return;
+    }
+
+    this.chosenListContainer.innerHTML = list.map(item => `
+      <div class="chosen-chip">
+        <div>
+          <span>${item.code}</span>
+          <span class="chosen-chip-sub">(${item.branch} &bull; ${item.year} &bull; Div ${item.division})</span>
+        </div>
+        <button type="button" class="chosen-chip-remove" title="Remove ${item.code}" onclick="${this.prefix}Picker.removeChosen('${item.code}')">&times;</button>
+      </div>
+    `).join("");
+  }
+
+  getChosenList() {
+    return Array.from(this.chosenMap.values());
+  }
+}
+
+// Global picker instances
+let manualPicker = null;
+let camStartPicker = null;
+let cctvPicker = null;
+
+function ensurePickersInitialized() {
+  if (!manualPicker && document.getElementById("manualPickerBranch")) {
+    manualPicker = new DivisionPicker({ prefix: "manual" });
+    window.manualPicker = manualPicker;
+  }
+  if (!camStartPicker && document.getElementById("camStartPickerBranch")) {
+    camStartPicker = new DivisionPicker({ prefix: "camStart" });
+    window.camStartPicker = camStartPicker;
+  }
+  if (!cctvPicker && document.getElementById("cctvPickerBranch")) {
+    cctvPicker = new DivisionPicker({ prefix: "cctv" });
+    window.cctvPicker = cctvPicker;
+  }
+}
+
+async function populateManualSessionDropdowns() {
+  ensurePickersInitialized();
+  const res = await fetch(`${API}/api/students`);
+  allStudentsCache = await res.json();
+  if (manualPicker) manualPicker.init(allStudentsCache);
+  if (cctvPicker) cctvPicker.init(allStudentsCache);
+}
+
+async function initSession() {
+  ensurePickersInitialized();
+  const sessionName = (document.getElementById("manualSessionName")?.value || "").trim();
+  const selectedClasses = manualPicker ? manualPicker.getChosenList() : [];
+  const msg = document.getElementById("initSessionMsg");
+
+  if (!sessionName) {
+    msg.textContent = "Please enter session name.";
+    msg.className = "status-msg error";
+    return;
+  }
+  if (selectedClasses.length === 0) {
+    msg.textContent = "Please filter and pick at least one division above (e.g. MECH_SY_A, MECH_TY_C).";
+    msg.className = "status-msg error";
+    return;
+  }
+
+  msg.textContent = "Initializing session and marking default absent...";
+  msg.className = "status-msg info";
+
+  try {
+    const res = await fetch(`${API}/api/admin/session/start`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        session: sessionName,
+        classes: selectedClasses
+      })
+    });
+    const data = await res.json();
+    msg.textContent = data.message;
+    msg.className = "status-msg " + (data.success ? "success" : "error");
+  } catch (e) {
+    msg.textContent = "Network error initializing session.";
+    msg.className = "status-msg error";
+  }
 }
 
 async function scanFace() {
+  ensurePickersInitialized();
   const video = document.getElementById("attendVideo");
   const image = grabFrame(video);
   const resultDiv = document.getElementById("attendResult");
@@ -421,6 +806,8 @@ async function scanFace() {
   resultDiv.innerHTML = `<div class="status-msg info">Checking liveness and scanning...</div>`;
 
   const sessionName = (document.getElementById("manualSessionName")?.value || "").trim();
+  const selectedClasses = manualPicker ? manualPicker.getChosenList() : [];
+
   if (!sessionName) {
     resultDiv.innerHTML = `<div class="status-msg error">Enter a session name first (e.g. DBMS Lecture).</div>`;
     scanBtn.disabled = false;
@@ -429,7 +816,11 @@ async function scanFace() {
 
   const res = await fetch(`${API}/api/attendance/scan`, {
     method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({ image, session_name: sessionName })
+    body: JSON.stringify({ 
+      image, 
+      session_name: sessionName, 
+      classes: selectedClasses
+    })
   });
   const data = await res.json();
 
@@ -496,9 +887,11 @@ function stopCctvPreview() {
 }
 
 async function startCctv() {
+  ensurePickersInitialized();
   const rtspUrl = document.getElementById("rtspUrl").value.trim();
   const sessionName = document.getElementById("cctvSessionName").value.trim();
   const duration = parseInt(document.getElementById("cctvDuration").value) || 40;
+  const selectedClasses = cctvPicker ? cctvPicker.getChosenList() : [];
   const msg = document.getElementById("cctvMsg");
 
   if (!rtspUrl) {
@@ -511,8 +904,13 @@ async function startCctv() {
     msg.className = "status-msg error";
     return;
   }
+  if (selectedClasses.length === 0) {
+    msg.textContent = "Please filter and pick at least one division above (e.g. MECH_SY_A, MECH_TY_C).";
+    msg.className = "status-msg error";
+    return;
+  }
 
-  msg.textContent = "Connecting to CCTV stream...";
+  msg.textContent = "Connecting to CCTV stream and initializing attendance...";
   msg.className = "status-msg info";
 
   const camSel = document.getElementById("cctvCameraSelect");
@@ -532,6 +930,7 @@ async function startCctv() {
       session_name: sessionName,
       camera_name,
       camera_id,
+      classes: selectedClasses
     })
   });
   const data = await res.json();
@@ -665,24 +1064,37 @@ async function openSessionDetail(sessionEnc, date) {
   // load students for this session+date
   const res = await fetch(`${API}/api/attendance/today?session=${encodeURIComponent(session)}&date=${encodeURIComponent(date)}`);
   const records = await res.json();
+  
+  const presentCount = records.filter(r => r.status === "present").length;
 
   document.getElementById("sessionDetailCard").style.display = "block";
   document.getElementById("sessionDetailTitle").textContent = session;
   document.getElementById("sessionDetailMeta").textContent = `Date: ${date}`;
-  document.getElementById("sessionDetailCount").textContent = `${records.length} student(s) present`;
+  document.getElementById("sessionDetailCount").textContent = `${presentCount} student(s) present`;
+  
   document.getElementById("sessionDetailBody").innerHTML = records.map((r, i) => {
-    const snap = r.snapshot
-      ? `<img src="${r.snapshot}" class="snap-thumb" alt="${r.name}" title="Click to view snapshot" onclick="openImageModal('${r.snapshot}', '${r.name} - Snapshot')">`
-      : `<div class="avatar-placeholder" style="width:34px; height:34px;">${getInitials(r.name)}</div>`;
+    const isAbsent = r.status === "absent";
+    
+    let snap;
+    if (isAbsent) {
+      snap = `<span class="badge error" style="font-size:0.7em;">Absent</span>`;
+    } else if (r.snapshot) {
+      snap = `<img src="${r.snapshot}" class="snap-thumb" alt="${r.name}" title="Click to view snapshot" onclick="openImageModal('${r.snapshot}', '${r.name} - Snapshot')">`;
+    } else {
+      snap = `<div class="avatar-placeholder" style="width:34px; height:34px;">${getInitials(r.name)}</div>`;
+    }
+    
+    const timeDisplay = isAbsent ? '<span class="muted">--:--</span>' : r.time;
+    
     return `
-      <tr>
+      <tr ${isAbsent ? 'style="opacity: 0.7;"' : ''}>
         <td>${i + 1}</td>
-        <td style="width:44px;">${snap}</td>
+        <td style="width:60px; text-align:center;">${snap}</td>
         <td>${r.roll_no}</td>
         <td><strong>${r.name}</strong></td>
         <td>${r.division}</td>
         <td>${r.branch || "—"}</td>
-        <td>${r.time}</td>
+        <td>${timeDisplay}</td>
       </tr>`;
   }).join("") || `<tr><td colspan="7" style="text-align:center; padding:20px; color:var(--muted);">No students in this session.</td></tr>`;
 
@@ -788,13 +1200,19 @@ async function deleteCamera(id) {
   loadCameras();
 }
 
-function prepareCamStart(cam) {
+async function prepareCamStart(cam) {
   pendingCamera = cam;
   const name = cam.classroom || cam.name || "Classroom";
   document.getElementById("camStartPanel").style.display = "block";
   document.getElementById("camStartName").textContent = name;
   document.getElementById("camStartSession").value = `${name} Lecture`;
   document.getElementById("camStartMsg").textContent = "";
+  
+  ensurePickersInitialized();
+  const res = await fetch(`${API}/api/students`);
+  allStudentsCache = await res.json();
+  if (camStartPicker) camStartPicker.init(allStudentsCache);
+
   document.getElementById("camStartPanel").scrollIntoView({ behavior: "smooth" });
 }
 
@@ -805,14 +1223,23 @@ function cancelCamStart() {
 
 async function startFromCamera() {
   if (!pendingCamera) return;
+  ensurePickersInitialized();
   const sessionName = document.getElementById("camStartSession").value.trim();
   const duration = parseInt(document.getElementById("camStartDuration").value) || 40;
+  const selectedClasses = camStartPicker ? camStartPicker.getChosenList() : [];
+
   const msg = document.getElementById("camStartMsg");
   if (!sessionName) {
     msg.textContent = "Enter a session name (subject).";
     msg.className = "status-msg error";
     return;
   }
+  if (selectedClasses.length === 0) {
+    msg.textContent = "Please filter and pick at least one division above (e.g. MECH_SY_A, MECH_TY_C).";
+    msg.className = "status-msg error";
+    return;
+  }
+
   msg.textContent = "Starting...";
   msg.className = "status-msg info";
   const res = await fetch(`${API}/api/cctv/start`, {
@@ -824,6 +1251,7 @@ async function startFromCamera() {
       camera_name: pendingCamera.classroom || pendingCamera.name,
       session_name: sessionName,
       duration_minutes: duration,
+      classes: selectedClasses
     })
   });
   const data = await res.json();
@@ -938,3 +1366,281 @@ function handleModalEsc(e) {
   if (e.key === "Escape") closeImageModal();
 }
 
+// ---------- Attendance Requests (Admin) ----------
+let cachedRequests = [];
+
+async function loadRequests() {
+  try {
+    const res = await fetch(`${API}/api/attendance/requests`);
+    const reqs = await res.json();
+    cachedRequests = reqs;
+    const body = document.getElementById("requestsTableBody");
+    
+    if (!reqs.length) {
+      body.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:24px; color:var(--muted);">No pending requests.</td></tr>`;
+      return;
+    }
+    
+    body.innerHTML = reqs.map(r => {
+      let statusBadge = `<span class="badge pending">Pending</span>`;
+      if (r.status === 'approved') statusBadge = `<span class="badge done">Approved</span>`;
+      if (r.status === 'rejected') statusBadge = `<span class="badge error">Rejected</span>`;
+      
+      let actions = `<span class="muted-inline">Reviewed</span>`;
+      if (r.status === 'pending') {
+        actions = `
+          <button class="btn btn-sm" style="padding:4px 10px; margin-right:4px;" onclick="openVerifyModal('${r._id}')">Approve</button>
+          <button class="btn secondary btn-sm" style="padding:4px 10px;" onclick="reviewRequest('${r._id}', 'rejected')">Reject</button>
+        `;
+      }
+      
+      return `
+        <tr>
+          <td>${r.date}</td>
+          <td>${r.session}</td>
+          <td>${r.prn}</td>
+          <td><strong>${r.student_name}</strong></td>
+          <td>${r.reason}</td>
+          <td>${statusBadge}</td>
+          <td>${actions}</td>
+        </tr>
+      `;
+    }).join("");
+  } catch (e) {
+    console.error("Error loading requests:", e);
+  }
+}
+
+async function reviewRequest(id, status) {
+  if (!confirm(`Are you sure you want to ${status.slice(0, -1)} this request?`)) return;
+  
+  try {
+    const res = await fetch(`${API}/api/attendance/requests/${id}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status })
+    });
+    const data = await res.json();
+    if (data.success) {
+      loadRequests();
+      if (typeof loadToday === "function") loadToday();
+    } else {
+      alert("Failed to review request: " + data.message);
+    }
+  } catch (e) {
+    alert("Network error reviewing request.");
+  }
+}
+
+let currentVerifyRequestId = null;
+let currentVerifyRequest = null;
+let verifyStream = null;
+
+async function openVerifyModal(id) {
+  currentVerifyRequestId = id;
+  const modal = document.getElementById("verifyModal");
+  const video = document.getElementById("verifyVideo");
+  const msg = document.getElementById("verifyMsg");
+  const captureBtn = document.getElementById("verifyCaptureBtn");
+  const manualBtn = document.getElementById("verifyManualBtn");
+  const cameraDot = document.getElementById("verifyCameraDot");
+  const cameraStatus = document.getElementById("verifyCameraStatus");
+
+  // Lookup request
+  let req = (cachedRequests || []).find(r => r._id === id);
+  if (!req) {
+    try {
+      const res = await fetch(`${API}/api/attendance/requests`);
+      cachedRequests = await res.json();
+      req = cachedRequests.find(r => r._id === id);
+    } catch (e) {}
+  }
+  currentVerifyRequest = req;
+
+  // Lookup student in cache or fetch
+  let student = (allStudentsCache || []).find(s => String(s.prn) === String(req?.prn));
+  if (!student && req?.prn) {
+    try {
+      const sRes = await fetch(`${API}/api/students`);
+      allStudentsCache = await sRes.json();
+      student = (allStudentsCache || []).find(s => String(s.prn) === String(req.prn));
+    } catch (e) {}
+  }
+
+  // Populate student details
+  document.getElementById("verifyStudentName").textContent = req?.student_name || student?.name || "Student";
+  document.getElementById("verifyStudentPrn").textContent = req?.prn || "—";
+  document.getElementById("verifyStudentSession").textContent = req?.session || "—";
+  document.getElementById("verifyStudentDate").textContent = req?.date || "—";
+  document.getElementById("verifyStudentReason").textContent = req?.reason || "—";
+
+  const classBadge = document.getElementById("verifyStudentClass");
+  if (student) {
+    classBadge.textContent = `${student.branch || 'Branch'} · Div ${student.division || 'A'}`;
+    classBadge.style.display = "inline-block";
+  } else {
+    classBadge.style.display = "none";
+  }
+
+  // Student Photo or Initials
+  const photoImg = document.getElementById("verifyStudentPhoto");
+  const initialsSpan = document.getElementById("verifyStudentInitials");
+  const studentPhotoUrl = student?.photo || student?.photos?.center || "";
+  if (studentPhotoUrl) {
+    photoImg.src = studentPhotoUrl;
+    photoImg.style.display = "block";
+    initialsSpan.style.display = "none";
+  } else {
+    photoImg.style.display = "none";
+    initialsSpan.style.display = "block";
+    initialsSpan.textContent = getInitials(req?.student_name || "S");
+  }
+
+  // Display modal
+  modal.style.display = "flex";
+  msg.textContent = "";
+  msg.className = "status-msg";
+  cameraDot.style.background = "#f59e0b";
+  cameraStatus.textContent = "Connecting camera...";
+  captureBtn.disabled = true;
+  manualBtn.disabled = false;
+  document.getElementById("verifyCaptureText").textContent = "Scan Face & Verify";
+
+  // Request webcam stream
+  try {
+    verifyStream = await navigator.mediaDevices.getUserMedia({ 
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" } 
+    });
+    video.srcObject = verifyStream;
+    await video.play();
+    cameraDot.style.background = "#10b981";
+    cameraStatus.textContent = "Webcam Live";
+    msg.textContent = "Look into the camera and click 'Scan Face & Verify', or click 'Approve Manually'.";
+    msg.className = "status-msg info";
+    captureBtn.disabled = false;
+  } catch (err) {
+    console.warn("Camera access error:", err);
+    cameraDot.style.background = "#ef4444";
+    cameraStatus.textContent = "Camera unavailable";
+    msg.textContent = "Camera access denied or device not found. You can still approve this request using 'Approve Manually'.";
+    msg.className = "status-msg error";
+    captureBtn.disabled = true;
+  }
+}
+
+function closeVerifyModal() {
+  const modal = document.getElementById("verifyModal");
+  if (modal) modal.style.display = "none";
+  if (verifyStream) {
+    verifyStream.getTracks().forEach(t => t.stop());
+    verifyStream = null;
+  }
+  const video = document.getElementById("verifyVideo");
+  if (video) video.srcObject = null;
+  currentVerifyRequestId = null;
+  currentVerifyRequest = null;
+}
+
+async function captureVerify() {
+  const video = document.getElementById("verifyVideo");
+  const canvas = document.getElementById("verifyCanvas");
+  const msg = document.getElementById("verifyMsg");
+  const captureBtn = document.getElementById("verifyCaptureBtn");
+  const manualBtn = document.getElementById("verifyManualBtn");
+
+  if (!currentVerifyRequestId) return;
+
+  captureBtn.disabled = true;
+  manualBtn.disabled = true;
+  document.getElementById("verifyCaptureText").textContent = "Analyzing Face...";
+  msg.textContent = "Detecting face and matching biometric signature...";
+  msg.className = "status-msg info";
+
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const b64 = canvas.toDataURL("image/jpeg", 0.9).split(',')[1];
+
+  try {
+    const res = await fetch(`${API}/api/attendance/requests/${currentVerifyRequestId}/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: b64 })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      msg.textContent = "✓ Face verified successfully! Attendance marked present.";
+      msg.className = "status-msg success";
+      setTimeout(() => {
+        closeVerifyModal();
+        loadRequests();
+        if (typeof loadToday === "function") loadToday();
+      }, 1500);
+    } else {
+      msg.textContent = "Verification failed: " + (data.message || "Face not recognized.");
+      msg.className = "status-msg error";
+      captureBtn.disabled = false;
+      manualBtn.disabled = false;
+      document.getElementById("verifyCaptureText").textContent = "Scan Face & Verify";
+    }
+  } catch (err) {
+    msg.textContent = "Network error during biometric verification.";
+    msg.className = "status-msg error";
+    captureBtn.disabled = false;
+    manualBtn.disabled = false;
+    document.getElementById("verifyCaptureText").textContent = "Scan Face & Verify";
+  }
+}
+
+async function approveManually() {
+  if (!currentVerifyRequestId) return;
+  const reqName = currentVerifyRequest?.student_name || "this student";
+  if (!confirm(`Are you sure you want to manually approve attendance for ${reqName}?`)) return;
+
+  const msg = document.getElementById("verifyMsg");
+  const captureBtn = document.getElementById("verifyCaptureBtn");
+  const manualBtn = document.getElementById("verifyManualBtn");
+
+  captureBtn.disabled = true;
+  manualBtn.disabled = true;
+  msg.textContent = "Approving attendance manually...";
+  msg.className = "status-msg info";
+
+  try {
+    const res = await fetch(`${API}/api/attendance/requests/${currentVerifyRequestId}/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: "" })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      msg.textContent = "✓ Request approved manually! Attendance marked present.";
+      msg.className = "status-msg success";
+      setTimeout(() => {
+        closeVerifyModal();
+        loadRequests();
+        if (typeof loadToday === "function") loadToday();
+      }, 1200);
+    } else {
+      msg.textContent = "Failed to approve: " + data.message;
+      msg.className = "status-msg error";
+      captureBtn.disabled = false;
+      manualBtn.disabled = false;
+    }
+  } catch (err) {
+    msg.textContent = "Network error while approving request.";
+    msg.className = "status-msg error";
+    captureBtn.disabled = false;
+    manualBtn.disabled = false;
+  }
+}
+
+async function rejectFromModal() {
+  if (!currentVerifyRequestId) return;
+  const id = currentVerifyRequestId;
+  closeVerifyModal();
+  await reviewRequest(id, 'rejected');
+}

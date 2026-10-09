@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Student Portal</title>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/student.css?v=10">
+  
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/ui/6.0.2/firebase-ui-auth.js"></script>
+  <link type="text/css" rel="stylesheet" href="https://www.gstatic.com/firebasejs/ui/6.0.2/firebase-ui-auth.css" />
+
+  <script defer src="/js/student.js?v=10"></script>
+</head>
+<body class="student-theme">
+
+<div class="app-container">
+
+  <!-- Auth Screen -->
+  <div id="authScreen">
+    <div class="v-logo">CampusVision</div>
+    <h2>Welcome Back!</h2>
+    <p style="color:var(--v-muted); margin-bottom:24px;">Sign in to view your attendance</p>
+    <div id="firebaseui-auth-container"></div>
+    <div id="authErrorMsg" style="display:none; color:red; margin-top:16px; font-size:14px;"></div>
+  </div>
+
+  <!-- Topbar (White header for internal pages) -->
+  <div class="v-topbar hidden" id="topbar">
+    <button class="v-back-btn" id="backBtn" onclick="goBack()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <div class="v-topbar-title" id="topTitle">Academic Planning</div>
+    <button class="v-icon-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+    </button>
+  </div>
+
+  <div class="v-content hidden" id="mainContent">
+    
+    <!-- View: Home -->
+    <div id="view-home" class="view">
+      <div class="v-home-header-top">
+        <div class="v-home-hi" id="homeHiName">HI STUDENT !</div>
+        <div style="cursor:pointer; position:relative;" onclick="switchView('notifications')" title="Notifications">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1a1a1a" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+          <span style="position:absolute; top:-2px; right:-2px; width:10px; height:10px; background:#e03131; border-radius:50%; border:2px solid #fff;"></span>
+        </div>
+      </div>
+      <div class="v-home-college" onclick="switchView('about')" style="cursor:pointer;" title="Tap to view About Institute">
+        <div class="v-home-college-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
+        </div>
+        <div class="v-home-college-text">
+          Kolhapur Institute of Technology's<br>
+          College of Engineering (Autonomous), Kolhapur
+        </div>
+      </div>
+      
+      <div class="v-profile-banner">
+        <img src="" alt="Profile" class="v-avatar" id="homeAvatar">
+        <div class="v-profile-info">
+          <h2 id="homeName">Student Name</h2>
+          <p id="homePRN">PRN12345</p>
+          <div class="v-badge-year" id="homeAcadYear">2026-27</div>
+        </div>
+      </div>
+      
+      <div class="v-dept-info">
+        <div class="v-dept-col">
+          <div class="v-dept-label">Department</div>
+          <div class="v-dept-val" id="homeBranch">Computer Science</div>
+        </div>
+        <div class="v-dept-col" style="text-align:center;">
+          <div class="v-dept-label">Semester</div>
+          <div class="v-dept-val" id="homeSem">SEM-I</div>
+        </div>
+        <div class="v-dept-col" style="text-align:right;">
+          <div class="v-dept-label">Division</div>
+          <div class="v-dept-val" id="homeDiv">Div A</div>
+        </div>
+      </div>
+      
+      <div class="v-section-title">Modules</div>
+      <div class="v-modules-scroll">
+        <div class="v-module-card" onclick="switchView('planning', 'lectures')">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+          <span>Academic<br>Planning</span>
+        </div>
+        <div class="v-module-card" onclick="switchView('about')">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"></path><path d="M6 12v5c3 3 9 3 12 0v-5"></path></svg>
+          <span>About<br>Institute</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- View: About Institute -->
+    <div id="view-about" class="view hidden">
+      <div class="v-about-hero">
+        <img src="/img/kit_campus.jpg" alt="KIT College of Engineering Campus">
+        <div class="v-about-hero-overlay">
+          <span class="v-about-hero-badge">KITCOEK • ESTD 1983</span>
+          <h2 class="v-about-hero-title">Kolhapur Institute of Technology's College of Engineering (Autonomous), Kolhapur</h2>
+        </div>
+      </div>
+
+      <div class="v-about-card">
+        <h3>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--v-blue)" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+          About KITCoEK
+        </h3>
+        <p style="margin: 0 0 10px 0; font-size: 13px; color: var(--v-muted); line-height: 1.5; font-weight: 500;">
+          Kolhapur Institute of Technology's College of Engineering (Autonomous), Kolhapur was established in May 1983 by visionary engineers, industrialists, and educationists. KIT is recognized as the pioneer private autonomous engineering institute in Western Maharashtra, affiliated to Shivaji University, Kolhapur.
+        </p>
+        <div class="v-about-badge-grid">
+          <span class="v-about-pill">🏆 NAAC 'A+' Grade</span>
+          <span class="v-about-pill">🎖️ NBA Accredited</span>
+          <span class="v-about-pill">🏛️ Autonomous Institute</span>
+          <span class="v-about-pill">📜 AICTE Approved</span>
+          <span class="v-about-pill">🏷️ DTE Code: 6267</span>
+        </div>
+      </div>
+
+      <div class="v-about-card" style="padding: 0; overflow: hidden;">
+        <img src="/img/kit_lab.jpg" alt="KIT Labs and Library" style="width: 100%; height: 160px; object-fit: cover; display: block;">
+        <div style="padding: 16px;">
+          <h3 style="margin-top: 0;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--v-blue)" stroke-width="2.2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+            Campus & Smart Facilities
+          </h3>
+          <ul style="margin: 0; padding-left: 18px; font-size: 12px; color: var(--v-text); line-height: 1.6; font-weight: 500;">
+            <li><strong>AI-Powered Attendance:</strong> CampusVision smart CCTV and biometric face scanning across lecture halls.</li>
+            <li><strong>High-Performance Labs:</strong> Specialized NVIDIA GPU labs for CSE(AIML), Data Science, and Robotics.</li>
+            <li><strong>Central Library:</strong> Over 60,000+ volumes, international digital journals, and e-learning resources.</li>
+            <li><strong>Innovation Hub & Incubation:</strong> Active research cells and startup mentoring for budding engineers.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="v-about-card">
+        <h3>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--v-blue)" stroke-width="2.2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+          Contact & Location
+        </h3>
+        
+        <div class="v-contact-item">
+          <div class="v-contact-icon">📍</div>
+          <div>
+            <strong style="color: #1a1a1a;">Campus Address:</strong><br>
+            <span style="color: var(--v-muted);">Gokul Shirgaon, Kolhapur - 416234,<br>Maharashtra, India.</span>
+          </div>
+        </div>
+
+        <div class="v-contact-item">
+          <div class="v-contact-icon">📞</div>
+          <div>
+            <strong style="color: #1a1a1a;">Phone Numbers:</strong><br>
+            <span style="color: var(--v-muted);">Office: +91 231 2638141, 2638142<br>Admission: +91 77983 56868</span>
+          </div>
+        </div>
+
+        <div class="v-contact-item">
+          <div class="v-contact-icon">✉️</div>
+          <div>
+            <strong style="color: #1a1a1a;">Email Addresses:</strong><br>
+            <a href="mailto:info@kitcoek.in" style="color: var(--v-blue); text-decoration: none; font-weight: 600;">info@kitcoek.in</a> &bull; 
+            <a href="mailto:principal@kitcoek.in" style="color: var(--v-blue); text-decoration: none; font-weight: 600;">principal@kitcoek.in</a>
+          </div>
+        </div>
+
+        <div class="v-contact-item">
+          <div class="v-contact-icon">🌐</div>
+          <div>
+            <strong style="color: #1a1a1a;">Official Website:</strong><br>
+            <a href="https://www.kitcoek.in" target="_blank" rel="noopener" style="color: var(--v-blue); text-decoration: none; font-weight: 700;">www.kitcoek.in</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- View: Academic Planning -->
+    <div id="view-planning" class="view hidden">
+      <!-- Top Tabs for Academic Planning -->
+      <div class="v-course-top-tabs" id="planningTopTabs" style="margin-bottom:12px; background:var(--v-surface); border-bottom:1px solid var(--v-border);">
+        <div class="v-ct-tab active" data-tab="lectures" onclick="switchPlanningTab('lectures')">Day-wise</div>
+        <div class="v-ct-tab" data-tab="courses" onclick="switchPlanningTab('courses')">Course-wise</div>
+        <div class="v-ct-tab" data-tab="request" onclick="switchPlanningTab('request')">Leave Request</div>
+      </div>
+
+      <!-- Lectures Tab -->
+      <div id="planning-lectures">
+        <div style="padding:16px 20px 0; background:var(--v-surface);">
+          <div style="font-size:16px; font-weight:800; color:#1a1a1a;">Hello</div>
+          <div style="font-size:13px; color:var(--v-muted); font-weight:700; display:flex; justify-content:space-between; align-items:center;">
+             <span>Today you have <span id="lecCount">0</span> Lectures</span>
+             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a1a1a" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+          </div>
+        </div>
+        <div class="v-date-scroller" id="dateScroller" style="margin-top:12px;"></div>
+        <div class="v-lectures-list" id="lecturesList"></div>
+      </div>
+      
+      <!-- Courses Tab -->
+      <div id="planning-courses" class="hidden v-courses-view">
+        
+        <div class="v-chart-container">
+          <div class="v-donut" id="attendanceChart"></div>
+          <div class="v-chart-stats">
+            <h3 id="courseDivTitle">SEM-I</h3>
+            <p id="courseAvgLabel">Average Attendance <span id="avgAttText" style="color:var(--v-text)">0%</span></p>
+            <div class="v-stat-row"><div class="v-dot" style="background:var(--v-blue);"></div><span style="color:var(--v-blue);">Present</span> <span id="statPresent">0</span></div>
+            <div class="v-stat-row"><div class="v-dot" style="background:var(--v-orange);"></div><span style="color:var(--v-orange);">Absent</span> <span id="statAbsent">0</span></div>
+          </div>
+        </div>
+        
+        <div class="v-course-list-wrap">
+          <div class="v-course-list-header">
+            <span class="v-cl-title">Course List</span>
+            <span class="v-cl-action" onclick="this.innerText='Syncing...'; loadCourses().then(()=>this.innerText='Resync Attendance ↻')">Resync Attendance ↻</span>
+          </div>
+          <div id="coursesList"></div>
+        </div>
+      </div>
+
+      <!-- Session List (Course Detail) -->
+      <div id="planning-sessions" class="hidden" style="padding:20px; background:var(--v-bg); min-height:100%;">
+        <div style="background:var(--v-surface); border:1px solid var(--v-border); padding:16px; border-radius:12px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;">
+            <strong id="sessionCourseName" style="font-size:15px; color:#1a1a1a;">Course Name</strong>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--v-muted)" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+        </div>
+        
+        <div class="v-course-list-header" style="padding:0;">
+            <span style="font-size:13px; font-weight:800; color:#1a1a1a;">Lecture Type: All ▼</span>
+            <span class="v-cl-action" onclick="this.innerText='Syncing...'; loadSessions(currentCourseName).then(()=>this.innerText='Resync Attendance ↻')">Resync Attendance ↻</span>
+        </div>
+        <div id="sessionsList" style="display:flex; flex-direction:column; gap:16px; margin-top:16px;">
+        </div>
+      </div>
+      
+      <!-- Manual Request Tab -->
+      <div id="planning-request" class="hidden" style="padding:20px;">
+        <div class="v-course-card" style="margin-bottom:24px; cursor:default; box-shadow:none;">
+          <h4 style="margin-bottom:6px;">Leave / Attendance Request</h4>
+          <p style="font-size:12px; color:var(--v-muted); margin-bottom:16px; font-weight:600;">Submit a manual request for attendance.</p>
+          
+          <div class="v-form-group">
+            <label>Date</label>
+            <input type="date" id="reqDate">
+          </div>
+          <div class="v-form-group">
+            <label>Session / Course</label>
+            <input type="text" id="reqSession" placeholder="e.g. Machine Learning">
+          </div>
+          <div class="v-form-group">
+            <label>Reason</label>
+            <input type="text" id="reqReason" placeholder="e.g. Camera missed my face">
+          </div>
+          <button class="v-btn" onclick="submitRequest()">Submit Request</button>
+          <div id="reqMsg" style="margin-top:12px; font-size:13px; font-weight:700; text-align:center;"></div>
+        </div>
+        
+        <div style="font-size:14px; font-weight:800; margin-bottom:12px; color:#1a1a1a;">My Recent Requests</div>
+        <div id="myRequestsList"></div>
+      </div>
+    </div>
+    
+    <!-- View: Notifications -->
+    <div id="view-notifications" class="view hidden" style="padding:20px; background:var(--v-bg); min-height:100%;">
+      <div id="notificationsList"></div>
+    </div>
+
+    <!-- View: Profile -->
+    <div id="view-profile" class="view hidden" style="padding:20px;">
+      <div class="v-course-card" style="cursor:default; box-shadow:none;">
+        <h3 style="margin:0 0 16px 0; font-size:16px; font-weight:800;">My Account</h3>
+        <p style="margin:8px 0; font-size:14px;"><strong style="display:inline-block; width:110px;">Name:</strong> <span id="profName"></span></p>
+        <p style="margin:8px 0; font-size:14px;"><strong style="display:inline-block; width:110px;">PRN:</strong> <span id="profPRN"></span></p>
+        <p style="margin:8px 0; font-size:14px;"><strong style="display:inline-block; width:110px;">Roll No:</strong> <span id="profRollNo"></span></p>
+        <p style="margin:8px 0; font-size:14px;"><strong style="display:inline-block; width:110px;">Division:</strong> <span id="profDiv"></span></p>
+        <p style="margin:8px 0; font-size:14px;"><strong style="display:inline-block; width:110px;">Semester:</strong> <span id="profSem"></span></p>
+        <p style="margin:8px 0; font-size:14px;"><strong style="display:inline-block; width:110px;">Branch:</strong> <span id="profBranch"></span></p>
+        <p style="margin:8px 0; font-size:14px;"><strong style="display:inline-block; width:110px;">Academic Year:</strong> <span id="profAcadYear"></span></p>
+        <p style="margin:8px 0; font-size:14px;"><strong style="display:inline-block; width:110px;">Email:</strong> <span id="profEmail"></span></p>
+        <p style="margin:8px 0; font-size:14px;"><strong style="display:inline-block; width:110px;">Phone:</strong> <span id="profPhone"></span></p>
+        
+        <h4 style="margin:24px 0 12px 0; font-size:14px; font-weight:700;">Captured Biometrics</h4>
+        <div id="profPhotos" style="display:flex; gap:10px; overflow-x:auto; padding-bottom:10px;">
+          <!-- Photos injected here -->
+        </div>
+
+        <button onclick="signOut()" style="margin-top:24px; padding:14px; background:#ffe3e3; color:#e03131; border:none; border-radius:12px; font-weight:800; width:100%; cursor:pointer;">Sign Out</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Global Bottom Nav -->
+  <div class="v-bottom-nav" id="globalNav">
+    <button class="v-nav-item active" data-main="home" onclick="switchView('home')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+      Home
+    </button>
+    <button class="v-nav-item" data-main="planning" onclick="switchView('planning')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+      Academic Planning
+    </button>
+    <button class="v-nav-item" data-main="profile" onclick="switchView('profile')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+      Profile
+    </button>
+  </div>
+
+</div>
+
+</body>
+</html>

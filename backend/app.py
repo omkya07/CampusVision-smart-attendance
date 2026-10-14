@@ -1644,18 +1644,25 @@ def print_startup_diagnostics():
     # Face engine (loads models once)
     try:
         eng = FaceEngine.get()
-        print("  FACE ENGINE")
-        print(f"  Backend    : {eng.backend} / {eng.model_name}")
-        print(f"  Embed dim  : {eng.embedding_dim()}")
+        print("  FACE ENGINE & RECOGNITION PIPELINE")
+        print(f"  Backend      : {eng.backend} / {eng.model_name}")
+        print(f"  Embed dim    : {eng.embedding_dim()} (ArcFace standard feature vector)")
         try:
-            from face_engine import DET_SIZE, DET_THRESH
-            print(f"  Det size   : {DET_SIZE}  thresh={DET_THRESH}")
+            from face_engine import DET_SIZE, DET_THRESH, YOLO_IMGSZ, MIN_FACE_PX, USE_SEATING_GRID
+            print(f"  Detector     : SCRFD det_size={DET_SIZE}  thresh={DET_THRESH}  min_face={MIN_FACE_PX}px")
+            print(f"  YOLO stage   : {YOLO_IMGSZ}px  |  Seating grid: {'ACTIVE' if USE_SEATING_GRID else 'OFF'}")
+        except Exception:
+            pass
+        try:
+            from cctv_session import CCTV_MATCH_THRESHOLD, CONFIRM_COUNT, FRAME_RESIZE_WIDTH
+            print(f"  CCTV Match   : threshold={CCTV_MATCH_THRESHOLD}  confirm_count={CONFIRM_COUNT} frames")
+            print(f"  CCTV Frame   : max_width={FRAME_RESIZE_WIDTH}px (detail preservation)")
         except Exception:
             pass
         try:
             from face_index import FaceIndex
             fi = FaceIndex(dim=eng.embedding_dim())
-            print(f"  Match idx  : {'faiss' if fi.info()['faiss_available'] else 'numpy'}")
+            print(f"  Match index  : {'faiss (accelerated vector search)' if fi.info()['faiss_available'] else 'numpy'}")
         except Exception:
             pass
     except Exception as e:

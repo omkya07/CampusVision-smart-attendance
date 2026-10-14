@@ -197,7 +197,7 @@ class FaceEngine:
                     from ultralytics import YOLO
                     yolo_name = os.environ.get("YOLO_MODEL", "yolo11n.pt")
                     self._person_model = YOLO(yolo_name)
-                    print(f"[FaceEngine] Two-stage ON: {yolo_name} (1280px bench-split) → ArcFace")
+                    print(f"[FaceEngine] Two-stage ON: {yolo_name} ({YOLO_IMGSZ}px bench-split) → ArcFace")
                 except Exception as e:
                     self._person_model = None
                     print(f"[FaceEngine] Two-stage person model unavailable ({e}); using seating grid only")

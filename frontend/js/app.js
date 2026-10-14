@@ -17,10 +17,11 @@ document.querySelectorAll(".nav-btn").forEach(btn => {
 
     if (btn.dataset.view === "students") loadStudents();
     if (btn.dataset.view === "enroll") loadStudentSelect();
-    if (btn.dataset.view === "attendance") { loadToday(); startAttendCamera(); populateManualSessionDropdowns(); }
-    if (btn.dataset.view === "cameras") loadCameras();
-    if (btn.dataset.view === "cctv") { fillCctvCameraSelect(); }
+    if (btn.dataset.view === "attendance") { loadToday(); startAttendCamera(); loadStudentsCacheIfNeeded(); }
+    if (btn.dataset.view === "cameras") { loadCameras(); loadStudentsCacheIfNeeded(); }
+    if (btn.dataset.view === "cctv") { fillCctvCameraSelect(); loadStudentsCacheIfNeeded(); }
     if (btn.dataset.view === "sessions") loadSessionsPage();
+    if (btn.dataset.view === "requests") loadRequests();
   });
 });
 
@@ -108,6 +109,10 @@ async function handleCsvUpload(e) {
 async function loadStudents() {
   const res = await fetch(`${API}/api/students`);
   const students = await res.json();
+  allStudentsCache = students;
+  if (window.manualPicker) manualPicker.init(students);
+  if (window.cctvPicker) cctvPicker.init(students);
+  if (window.camStartPicker) camStartPicker.init(students);
   const body = document.getElementById("studentTableBody");
   
   // Populate filters
@@ -749,12 +754,23 @@ function ensurePickersInitialized() {
   }
 }
 
-async function populateManualSessionDropdowns() {
+async function loadStudentsCacheIfNeeded(force = false) {
   ensurePickersInitialized();
-  const res = await fetch(`${API}/api/students`);
-  allStudentsCache = await res.json();
+  if (force || !allStudentsCache || allStudentsCache.length === 0) {
+    try {
+      const res = await fetch(`${API}/api/students`);
+      allStudentsCache = await res.json();
+    } catch (e) {
+      console.warn("Failed to load students cache:", e);
+    }
+  }
   if (manualPicker) manualPicker.init(allStudentsCache);
   if (cctvPicker) cctvPicker.init(allStudentsCache);
+  if (camStartPicker) camStartPicker.init(allStudentsCache);
+}
+
+async function populateManualSessionDropdowns() {
+  await loadStudentsCacheIfNeeded();
 }
 
 async function initSession() {
@@ -871,12 +887,36 @@ function formatSeconds(s) {
 function startCctvPreview() {
   const img = document.getElementById("cctvPreview");
   if (!img) return;
-  if (cctvPreviewHandle) clearInterval(cctvPreviewHandle);
-  const refresh = () => {
-    img.src = `${API}/api/cctv/preview?session_id=${currentSessionId || ''}&t=${Date.now()}`;
+  stopCctvPreview();
+
+  // Try continuous live MJPEG stream first for true real-time video
+  const streamUrl = `${API}/api/cctv/stream?session_id=${currentSessionId || ''}&t=${Date.now()}`;
+  img.src = streamUrl;
+
+  // Resilient fallback: If stream connection drops or isn't supported, poll fast snapshots (~250ms)
+  let isPolling = false;
+  let inFlight = false;
+  const pollSnapshot = () => {
+    if (inFlight) return;
+    inFlight = true;
+    const temp = new Image();
+    temp.onload = () => {
+      img.src = temp.src;
+      inFlight = false;
+    };
+    temp.onerror = () => {
+      inFlight = false;
+    };
+    temp.src = `${API}/api/cctv/preview?session_id=${currentSessionId || ''}&t=${Date.now()}`;
   };
-  refresh();
-  cctvPreviewHandle = setInterval(refresh, 500);
+
+  img.onerror = () => {
+    if (!isPolling) {
+      isPolling = true;
+      cctvPreviewHandle = setInterval(pollSnapshot, 250);
+      pollSnapshot();
+    }
+  };
 }
 
 function stopCctvPreview() {
@@ -884,6 +924,8 @@ function stopCctvPreview() {
     clearInterval(cctvPreviewHandle);
     cctvPreviewHandle = null;
   }
+  const img = document.getElementById("cctvPreview");
+  if (img) img.src = "";
 }
 
 async function startCctv() {
@@ -904,11 +946,7 @@ async function startCctv() {
     msg.className = "status-msg error";
     return;
   }
-  if (selectedClasses.length === 0) {
-    msg.textContent = "Please filter and pick at least one division above (e.g. MECH_SY_A, MECH_TY_C).";
-    msg.className = "status-msg error";
-    return;
-  }
+  // Note: if selectedClasses is empty, session will match all enrolled students in the database
 
   msg.textContent = "Connecting to CCTV stream and initializing attendance...";
   msg.className = "status-msg info";
@@ -1079,9 +1117,9 @@ async function openSessionDetail(sessionEnc, date) {
     if (isAbsent) {
       snap = `<span class="badge error" style="font-size:0.7em;">Absent</span>`;
     } else if (r.snapshot) {
-      snap = `<img src="${r.snapshot}" class="snap-thumb" alt="${r.name}" title="Click to view snapshot" onclick="openImageModal('${r.snapshot}', '${r.name} - Snapshot')">`;
+      snap = `<img src="${r.snapshot}" class="snap-thumb" alt="${r.name}" title="Click to view live CCTV face capture" onclick="openImageModal('${r.snapshot}', '${r.name} - Live CCTV Capture')">`;
     } else {
-      snap = `<div class="avatar-placeholder" style="width:34px; height:34px;">${getInitials(r.name)}</div>`;
+      snap = `<div class="avatar-placeholder" style="width:34px; height:34px;" title="CCTV snapshot pending">${getInitials(r.name)}</div>`;
     }
     
     const timeDisplay = isAbsent ? '<span class="muted">--:--</span>' : r.time;
@@ -1644,3 +1682,15 @@ async function rejectFromModal() {
   closeVerifyModal();
   await reviewRequest(id, 'rejected');
 }
+
+// Auto-initialize pickers and preload student cache on page load
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    ensurePickersInitialized();
+    loadStudentsCacheIfNeeded();
+  });
+} else {
+  ensurePickersInitialized();
+  loadStudentsCacheIfNeeded();
+}
+

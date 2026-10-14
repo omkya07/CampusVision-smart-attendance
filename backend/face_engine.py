@@ -10,8 +10,34 @@ Tuned defaults for wide classroom CCTV (~20 ft to last row, up to ~80 students).
 from __future__ import annotations
 
 import os
+try:
+    from dotenv import load_dotenv
+    _root_env = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if os.path.exists(_root_env):
+        load_dotenv(_root_env)
+    _backend_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(_backend_env):
+        load_dotenv(_backend_env)
+except Exception:
+    pass
+
 os.environ.setdefault("ORT_LOGGING_LEVEL", "3")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
+# Ensure Windows finds CUDA 12 / cuDNN runtime DLLs from PyTorch if installed
+try:
+    import torch
+    _torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
+    if os.path.isdir(_torch_lib):
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(_torch_lib)
+            except Exception:
+                pass
+        os.environ["PATH"] = _torch_lib + os.pathsep + os.environ.get("PATH", "")
+except Exception:
+    pass
+
 import threading
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -30,7 +56,18 @@ MODEL_NAME_DLIB = "dlib_128"
 def _cuda_available() -> bool:
     try:
         import onnxruntime as ort
-        return "CUDAExecutionProvider" in ort.get_available_providers()
+        if "CUDAExecutionProvider" not in ort.get_available_providers():
+            return False
+        # On Windows, onnxruntime-gpu requires specific cuBLAS runtime DLLs in PATH.
+        # If missing, requesting CUDAExecutionProvider prints error spam and falls back.
+        import ctypes
+        for dll in ("cublasLt64_13.dll", "cublasLt64_12.dll", "cublasLt64_11.dll"):
+            try:
+                ctypes.CDLL(dll)
+                return True
+            except Exception:
+                pass
+        return False
     except Exception:
         return False
 
@@ -40,12 +77,12 @@ _HAS_CUDA = _cuda_available()
 if "DET_SIZE" in os.environ:
     DET_SIZE = int(os.environ["DET_SIZE"])
 else:
-    DET_SIZE = 1024 if _HAS_CUDA else 640
+    DET_SIZE = 1280 if _HAS_CUDA else 640
 
 if "DET_THRESH" in os.environ:
     DET_THRESH = float(os.environ["DET_THRESH"])
 else:
-    DET_THRESH = 0.20 if _HAS_CUDA else 0.30
+    DET_THRESH = 0.18 if _HAS_CUDA else 0.25
 
 # Tiled multi-scale detection is expensive — off by default on CPU.
 if "USE_FACE_TILES" in os.environ:
@@ -59,10 +96,22 @@ if "USE_PERSON_STAGE" in os.environ:
 else:
     USE_PERSON_STAGE = True  # try if ultralytics is installed; no-op otherwise
 
-# Min face box after upscale attempt (pixels)
-MIN_FACE_PX = int(os.environ.get("MIN_FACE_PX", "12"))
+# Configurable YOLO inference size (960 on GPU captures small distant seated students, 640 on CPU)
+YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "960" if _HAS_CUDA else "640"))
+
+# Min face box (pixels) — raised to 20 to prevent featureless noise from generating false identities
+MIN_FACE_PX = int(os.environ.get("MIN_FACE_PX", "20"))
 # Upscale small head crops so SCRFD sees a larger face
 HEAD_CROP_UPSCALE = float(os.environ.get("HEAD_CROP_UPSCALE", "2.5"))
+
+# Seating grid toggle: enabled by default when CUDA or tiles are active
+_grid_env = os.environ.get("USE_SEATING_GRID", "").strip().lower()
+if _grid_env in ("1", "true", "yes", "on"):
+    USE_SEATING_GRID = True
+elif _grid_env in ("0", "false", "no", "off"):
+    USE_SEATING_GRID = False
+else:
+    USE_SEATING_GRID = bool(_HAS_CUDA or USE_FACE_TILES)
 
 TRT_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".trt_cache")
 
@@ -107,11 +156,10 @@ class FaceEngine:
                 pass
 
             avail = ort.get_available_providers()
-            # Do NOT put TensorRT first: if TRT DLLs are missing, InsightFace
-            # often falls straight to CPU and never tries CUDA.
-            # CUDA alone is enough on a laptop (RTX 3050).
+            # Do NOT request CUDAExecutionProvider if underlying CUDA DLLs are missing,
+            # which avoids noisy C++ module-not-found spam and CPU stalling.
             providers = []
-            if "CUDAExecutionProvider" in avail:
+            if _HAS_CUDA and "CUDAExecutionProvider" in avail:
                 providers.append("CUDAExecutionProvider")
             providers.append("CPUExecutionProvider")
 
@@ -147,12 +195,12 @@ class FaceEngine:
             if USE_PERSON_STAGE:
                 try:
                     from ultralytics import YOLO
-                    # nano model — person class 0; downloads once
-                    self._person_model = YOLO("yolov8n.pt")
-                    print("[FaceEngine] Two-stage ON: YOLOv8n person → head crop → ArcFace")
+                    yolo_name = os.environ.get("YOLO_MODEL", "yolo11n.pt")
+                    self._person_model = YOLO(yolo_name)
+                    print(f"[FaceEngine] Two-stage ON: {yolo_name} (1280px bench-split) → ArcFace")
                 except Exception as e:
                     self._person_model = None
-                    print(f"[FaceEngine] Two-stage person model unavailable ({e}); using tile/upscale only")
+                    print(f"[FaceEngine] Two-stage person model unavailable ({e}); using seating grid only")
             return
         except Exception as e:
             print(f"[FaceEngine] InsightFace unavailable ({e});")
@@ -171,23 +219,8 @@ class FaceEngine:
         elif bgr_image.shape[2] == 1:
             bgr_image = cv2.cvtColor(bgr_image, cv2.COLOR_GRAY2BGR)
 
-        # Contrast boost (lighter on CPU to save time)
-        try:
-            h0, w0 = bgr_image.shape[:2]
-            do_clahe = True
-            if not getattr(self, "using_gpu", False) and (h0 * w0) > (1280 * 720):
-                # skip full-frame CLAHE on large CPU frames
-                do_clahe = False
-            if do_clahe:
-                lab = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2LAB)
-                l, a, b = cv2.split(lab)
-                clip = 2.0 if not getattr(self, "using_gpu", False) else 3.0
-                clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(8, 8))
-                l = clahe.apply(l)
-                bgr_image = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
-        except Exception:
-            pass
-
+        # Do NOT apply full-frame CLAHE: it distorts pixel color/contrast distribution
+        # causing ArcFace embedding vectors to diverge from clean enrollment embeddings.
         if self.backend == "arcface":
             return self._detect_arcface_pipeline(bgr_image)
         return self._detect_dlib(bgr_image)
@@ -208,24 +241,19 @@ class FaceEngine:
             return self._detect_arcface_once(bgr_image)
         return self._detect_dlib(bgr_image)
 
-    def _head_region_from_person(self, x1, y1, x2, y2, frame_h, frame_w):
-        """Upper portion of a person box ≈ head/shoulders for distant CCTV."""
+    def _head_region_from_person(self, x1, y1, x2, y2, frame_h, frame_w) -> Tuple[int, int, int, int]:
+        """
+        Extracts the upper head/shoulder band from a detected person or bench.
+        Whether 1, 2, or 3 students sit on the bench, SCRFD naturally detects
+        every distinct face in this crop without artificial slicing!
+        """
         pw, ph = x2 - x1, y2 - y1
-        # Prefer top ~45% of body box (heads in classroom seating)
+        if pw < 8 or ph < 8:
+            return 0, 0, 0, 0
         hx1 = max(0, int(x1 - 0.05 * pw))
         hx2 = min(frame_w, int(x2 + 0.05 * pw))
         hy1 = max(0, int(y1 - 0.05 * ph))
-        hy2 = min(frame_h, int(y1 + max(ph * 0.45, pw * 0.6)))
-        # Expand if box is tiny
-        min_side = 64
-        if (hx2 - hx1) < min_side:
-            cx = (hx1 + hx2) // 2
-            hx1 = max(0, cx - min_side // 2)
-            hx2 = min(frame_w, cx + min_side // 2)
-        if (hy2 - hy1) < min_side:
-            cy = (hy1 + hy2) // 2
-            hy1 = max(0, cy - min_side // 2)
-            hy2 = min(frame_h, cy + min_side // 2)
+        hy2 = min(frame_h, int(y1 + max(ph * 0.55, 60)))
         return hx1, hy1, hx2, hy2
 
     def _detect_on_crop_upscaled(self, bgr: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> List[DetectedFace]:
@@ -261,13 +289,13 @@ class FaceEngine:
         return out
 
     def _detect_person_stage(self, bgr: np.ndarray) -> List[DetectedFace]:
-        """Stage-1 person detect → head crop → upscale → ArcFace."""
+        """Stage-1 person/bench detect (YOLO_IMGSZ, conf=0.15) → head region → SCRFD finds distinct faces."""
         if self._person_model is None:
             return []
         h, w = bgr.shape[:2]
         try:
             results = self._person_model.predict(
-                bgr, classes=[0], conf=0.25, verbose=False, imgsz=640,
+                bgr, classes=[0], conf=0.15, verbose=False, imgsz=YOLO_IMGSZ,
             )
         except Exception:
             return []
@@ -279,22 +307,24 @@ class FaceEngine:
                 xyxy = box.xyxy[0].tolist()
                 px1, py1, px2, py2 = [int(v) for v in xyxy]
                 hx1, hy1, hx2, hy2 = self._head_region_from_person(px1, py1, px2, py2, h, w)
-                faces.extend(self._detect_on_crop_upscaled(bgr, hx1, hy1, hx2, hy2))
+                if hx2 > hx1 and hy2 > hy1:
+                    faces.extend(self._detect_on_crop_upscaled(bgr, hx1, hy1, hx2, hy2))
         return faces
 
     def _detect_upper_grid(self, bgr: np.ndarray) -> List[DetectedFace]:
         """
-        Classroom CCTV: heads sit in the upper/mid band. Dense grid + upscale
-        recovers faces when full-frame SCRFD only sees 'head-sized' blobs.
+        Classroom CCTV Seating Grid:
+        Students are seated on benches facing the teacher/board.
+        This slices the upper 85% seating area into overlapping high-resolution tiles.
+        Each bench is captured at native camera resolution so distant 20ft heads are NEVER shrunk!
         """
         h, w = bgr.shape[:2]
         faces: List[DetectedFace] = []
-        # Focus on upper 70% of the frame (seated students toward camera)
         y_end = int(h * 0.85)
         rows, cols = 3, 4
         cell_h = max(1, y_end // rows)
         cell_w = max(1, w // cols)
-        pad_y, pad_x = int(cell_h * 0.15), int(cell_w * 0.15)
+        pad_y, pad_x = int(cell_h * 0.20), int(cell_w * 0.20)
         for r in range(rows):
             for c in range(cols):
                 x0 = max(0, c * cell_w - pad_x)
@@ -306,22 +336,23 @@ class FaceEngine:
 
     def _detect_arcface_pipeline(self, bgr: np.ndarray) -> List[DetectedFace]:
         """
-        Full pipeline for distant classroom CCTV:
-          1) full-frame + optional tiles
-          2) person→head→upscale stage (if YOLO available)
-          3) upper-grid upscale stage when few faces found (heads-only view)
+        Full pipeline for distant classroom CCTV (up to 70 students, ~20ft back benches):
+          1) Full-frame multi-scale SCRFD detection
+          2) High-density Seating Grid pass (native resolution scan of classroom benches)
+          3) YOLO person pass (feeds detected seated body crops directly to SCRFD)
         """
         all_faces = self._detect_arcface_multiscale(bgr)
 
+        # Classroom seating grid pass: scan bench area when grid is active
+        h, w = bgr.shape[:2]
+        if USE_SEATING_GRID and w >= 640 and h >= 360:
+            all_faces.extend(self._detect_upper_grid(bgr))
+
+        # Person/bench stage: detects seated bodies at YOLO_IMGSZ & lets SCRFD locate distinct faces
         if USE_PERSON_STAGE and self._person_model is not None:
             all_faces.extend(self._detect_person_stage(bgr))
 
-        # If we still see few faces on a large frame, run head-grid upscale pass
-        h, w = bgr.shape[:2]
-        if len(all_faces) < 6 and (w >= 800 or h >= 500):
-            all_faces.extend(self._detect_upper_grid(bgr))
-
-        return self._nms_faces(all_faces)
+        return self._nms_faces(all_faces, iou_thresh=0.40)
 
     def _detect_arcface_once(self, bgr: np.ndarray) -> List[DetectedFace]:
         faces = self._app.get(bgr)
@@ -331,7 +362,10 @@ class FaceEngine:
             x1, y1, x2, y2 = [int(v) for v in f.bbox]
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w - 1, x2), min(h - 1, y2)
-            # Keep very small boxes (back row ~20 ft)
+            # Filter low-confidence detections or tiny featureless noise specs
+            score = float(getattr(f, "det_score", 1.0))
+            if score < DET_THRESH:
+                continue
             if x2 - x1 < MIN_FACE_PX or y2 - y1 < MIN_FACE_PX:
                 continue
             emb = np.asarray(f.embedding, dtype=np.float32)
@@ -409,10 +443,17 @@ class FaceEngine:
         return self._detect_arcface_multiscale(bgr)
 
     def _detect_dlib(self, bgr: np.ndarray) -> List[DetectedFace]:
-        import face_recognition
+        try:
+            import importlib
+            face_rec = importlib.import_module("face_recognition")
+        except ImportError:
+            raise RuntimeError(
+                "Optional 'face_recognition' package is not installed. "
+                "InsightFace (ArcFace buffalo_l) is active as the primary engine."
+            )
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        locations = face_recognition.face_locations(rgb, model="hog")
-        encodings = face_recognition.face_encodings(rgb, locations)
+        locations = face_rec.face_locations(rgb, model="hog")
+        encodings = face_rec.face_encodings(rgb, locations)
         out = []
         for (top, right, bottom, left), enc in zip(locations, encodings):
             emb = np.asarray(enc, dtype=np.float32)

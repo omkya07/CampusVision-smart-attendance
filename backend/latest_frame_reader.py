@@ -37,13 +37,15 @@ import time
 
 
 class LatestFrameReader:
-    def __init__(self, source, reconnect_delay_sec=5, max_reconnect_attempts=10):
+    def __init__(self, source, reconnect_delay_sec=3, max_reconnect_attempts=20):
         self.source = source
         self.reconnect_delay_sec = reconnect_delay_sec
         self.max_reconnect_attempts = max_reconnect_attempts
 
         self._cap = None
         self._latest_frame = None
+        self._frame_id = 0
+        self._last_frame_time = 0.0
         self._lock = threading.Lock()
         self._running = False
         self._thread = None
@@ -61,7 +63,10 @@ class LatestFrameReader:
         if self._thread:
             self._thread.join(timeout=2)
         if self._cap:
-            self._cap.release()
+            try:
+                self._cap.release()
+            except Exception:
+                pass
 
     def read(self):
         """Returns the most recent frame available, or None if not ready yet."""
@@ -70,49 +75,98 @@ class LatestFrameReader:
                 return None
             return self._latest_frame.copy()
 
+    def read_with_meta(self):
+        """Returns (frame, frame_id, age_seconds, connected)."""
+        with self._lock:
+            if self._latest_frame is None:
+                return None, 0, 999.0, self.connected
+            age = time.time() - self._last_frame_time if self._last_frame_time else 999.0
+            return self._latest_frame.copy(), self._frame_id, age, self.connected
+
     def _open_capture(self):
-        # Force FFmpeg backend with low-latency options - reduces RTSP's own
-        # internal buffering (separate from OpenCV's buffering above).
         import os
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-            "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay"
-        )
-        cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
-        # Ask OpenCV to keep only 1 frame in its own buffer too, where supported
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        src = self.source
+        if isinstance(src, str) and src.strip().isdigit():
+            src = int(src.strip())
+
+        if isinstance(src, int):
+            cap = cv2.VideoCapture(src, cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY)
+        else:
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+                "rtsp_transport;tcp|fflags;nobuffer|flags;low_delay|timeout;5000000"
+            )
+            cap = cv2.VideoCapture(src, cv2.CAP_FFMPEG)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(src)
+
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
         return cap
 
     def _reader_loop(self):
         self._cap = self._open_capture()
         reconnect_attempts = 0
 
-        if not self._cap.isOpened():
-            self.last_error = "Could not open stream on startup."
-            self._running = False
-            return
+        if not self._cap or not self._cap.isOpened():
+            self.last_error = f"Could not connect to camera source ({self.source})."
+            self.connected = False
+        else:
+            self.connected = True
 
-        self.connected = True
+        consecutive_failures = 0
+        MAX_CONSECUTIVE_FAILURES = 15  # tolerate transient packet hiccups (~0.5s) without reconnect freeze
 
         while self._running:
-            ret, frame = self._cap.read()
-            if not ret:
-                self.connected = False
+            if not self._cap or not self._cap.isOpened():
                 reconnect_attempts += 1
                 if reconnect_attempts > self.max_reconnect_attempts:
-                    self.last_error = "Lost connection and exceeded max reconnect attempts."
+                    self.last_error = f"Camera disconnected; exceeded {self.max_reconnect_attempts} reconnect attempts."
+                    self.connected = False
                     break
-                self._cap.release()
                 time.sleep(self.reconnect_delay_sec)
                 self._cap = self._open_capture()
                 continue
 
+            ret, frame = self._cap.read()
+            if not ret or frame is None or frame.size == 0:
+                consecutive_failures += 1
+                if consecutive_failures < MAX_CONSECUTIVE_FAILURES:
+                    # Brief network stutter / dropped packet: retry reading next frame without tearing down connection
+                    time.sleep(0.015)
+                    continue
+
+                # Stream genuinely lost after multiple consecutive failures
+                consecutive_failures = 0
+                self.connected = False
+                reconnect_attempts += 1
+                if reconnect_attempts > self.max_reconnect_attempts:
+                    self.last_error = "Lost connection to CCTV stream."
+                    break
+                try:
+                    self._cap.release()
+                except Exception:
+                    pass
+                time.sleep(self.reconnect_delay_sec)
+                self._cap = self._open_capture()
+                continue
+
+            consecutive_failures = 0
             reconnect_attempts = 0
             self.connected = True
             with self._lock:
                 self._latest_frame = frame
-            # Deliberately no sleep here - we WANT to drain frames as fast as
-            # the camera sends them, so the buffer never has a chance to grow.
+                self._frame_id += 1
+                self._last_frame_time = time.time()
+
+            # Yield GIL briefly so preview and Flask worker threads run smoothly
+            time.sleep(0.005)
 
         if self._cap:
-            self._cap.release()
+            try:
+                self._cap.release()
+            except Exception:
+                pass
         self._running = False
+

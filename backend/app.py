@@ -20,7 +20,19 @@ model weights (a few MB) — this happens once and is cached afterward.
 """
 
 import os
+import time
 import warnings
+
+try:
+    from dotenv import load_dotenv
+    _root_env = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if os.path.exists(_root_env):
+        load_dotenv(_root_env)
+    _backend_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(_backend_env):
+        load_dotenv(_backend_env)
+except Exception:
+    pass
 
 # Quiet TensorFlow / oneDNN / absl / protobuf noise before those libs load
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
@@ -30,6 +42,25 @@ os.environ.setdefault("ORT_LOGGING_LEVEL", "3")  # 3 = ERROR only
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*tf.losses.sparse_softmax.*")
+
+# Suppress TensorFlow's own internal logger (WARNING:tensorflow:... messages)
+import logging
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+logging.getLogger("absl").setLevel(logging.ERROR)
+
+# Register PyTorch CUDA 12 & cuDNN runtime DLLs in Windows search path
+try:
+    import torch
+    _torch_lib = os.path.join(os.path.dirname(torch.__file__), "lib")
+    if os.path.isdir(_torch_lib):
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(_torch_lib)
+            except Exception:
+                pass
+        os.environ["PATH"] = _torch_lib + os.pathsep + os.environ.get("PATH", "")
+except Exception:
+    pass
 
 from flask import Flask, request, jsonify, send_from_directory, g
 try:
@@ -278,7 +309,8 @@ def mark_attendance(student, session_name="Manual Scan", snapshot_b64=None, date
         "date": today,
     })
     
-    snapshot = snapshot_b64 or student.get("photo", "")
+    # Attendance snapshot proof (only live CCTV / camera crop; never disguise enrollment photo as CCTV snapshot)
+    snapshot = (snapshot_b64 or "").strip()
 
     if existing:
         if existing.get("status") == "absent":
@@ -291,6 +323,15 @@ def mark_attendance(student, session_name="Manual Scan", snapshot_b64=None, date
                 }}
             )
             return True
+        elif snapshot:
+            # If already marked present, but current record lacks a live snapshot or has old enrollment photo,
+            # upgrade it with the actual live CCTV face capture proof!
+            curr_snap = existing.get("snapshot", "")
+            if not curr_snap or curr_snap == student.get("photo", ""):
+                db.attendance.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {"snapshot": snapshot}}
+                )
         return False
 
     db.attendance.insert_one({
@@ -326,6 +367,15 @@ def serve_student_index():
     return send_from_directory(app.static_folder, "student.html")
 
 
+@app.route("/favicon.ico")
+def favicon():
+    fav_path = os.path.join(app.static_folder, "favicon.ico")
+    if os.path.exists(fav_path):
+        return send_from_directory(app.static_folder, "favicon.ico")
+    return ("", 204)
+
+
+
 # ---------------------------------------------------------
 # Student management APIs
 # ---------------------------------------------------------
@@ -353,6 +403,52 @@ def get_students():
     return jsonify(result)
 
 
+import secrets
+import string
+import requests
+from firebase_admin import auth as firebase_auth, exceptions
+
+def sync_student_to_firebase(email, name):
+    if not email:
+        return None
+    try:
+        # Generate a random 12-char secure password
+        password = ''.join(secrets.choice(string.ascii_letters + string.digits) for i in range(12))
+        try:
+            # Try to create the user in Firebase Auth
+            user = firebase_auth.create_user(
+                email=email,
+                password=password,
+                display_name=name
+            )
+            uid = user.uid
+            
+            # Send password reset email directly via Firebase REST API
+            firebase_api_key = os.environ.get("FIREBASE_API_KEY")
+            if firebase_api_key:
+                url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={firebase_api_key}"
+                res = requests.post(url, json={"requestType": "PASSWORD_RESET", "email": email})
+                if res.status_code == 200:
+                    print(f"[Firebase Sync] Created user and sent password reset email to {email}")
+                else:
+                    print(f"[Firebase Sync] Created user but failed to send reset email: {res.text}")
+            
+        except Exception as e:
+            # If user already exists in Firebase Auth, just fetch their UID
+            try:
+                user = firebase_auth.get_user_by_email(email)
+                uid = user.uid
+                print(f"[Firebase Sync] User already exists in Firebase. Fetched existing UID for {email}")
+            except Exception as fetch_err:
+                print(f"[Firebase Sync] Error creating or fetching user {email}: {e} | {fetch_err}")
+                return None
+            
+        return uid
+    except Exception as outer_e:
+        print(f"[Firebase Sync] Critical Error: {outer_e}")
+        return None
+
+
 @app.route("/api/students", methods=["POST"])
 def add_student():
     data = request.json
@@ -376,6 +472,12 @@ def add_student():
         "branch": data.get("branch", "").strip(),
         "encodings": {},   # angle -> encoding
     }
+    
+    # Auto-create Firebase account and trigger password reset email
+    firebase_uid = sync_student_to_firebase(db[prn]["email"], db[prn]["name"])
+    if firebase_uid:
+        db[prn]["firebase_uid"] = firebase_uid
+        
     save_students_db(db)
     return jsonify({"success": True, "message": "Student registered"})
 
@@ -412,6 +514,13 @@ def upload_students_csv():
             db[prn]["semester"] = normalized_row.get("semester", normalized_row.get("sem", db[prn].get("semester", "")))
             db[prn]["division"] = normalized_row.get("division", normalized_row.get("div", db[prn].get("division", "")))
             db[prn]["branch"] = normalized_row.get("branch", normalized_row.get("dept", db[prn].get("branch", "")))
+            
+            # Auto-create Firebase account and trigger password reset email
+            if not db[prn].get("firebase_uid") and db[prn].get("email"):
+                firebase_uid = sync_student_to_firebase(db[prn]["email"], db[prn]["name"])
+                if firebase_uid:
+                    db[prn]["firebase_uid"] = firebase_uid
+                    
             count += 1
             
         save_students_db(db)
@@ -1126,6 +1235,31 @@ def cctv_preview():
                     headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
 
+@app.route("/api/cctv/stream")
+def cctv_stream():
+    """Live continuous MJPEG stream (ultra-low latency, zero JS timer lag)."""
+    from flask import Response
+    session_id = request.args.get("session_id")
+    def gen():
+        last_data = None
+        while True:
+            worker = sessions.get_worker(session_id) if session_id else None
+            # If session is stopped or not running, exit generator to free thread
+            if session_id and worker and not worker.status().get("running"):
+                jpeg = worker.get_preview_jpeg()
+                if jpeg:
+                    yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n")
+                break
+
+            jpeg = sessions.get_preview_jpeg(session_id) if session_id else None
+            if jpeg and jpeg != last_data:
+                last_data = jpeg
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + b"\r\n")
+            time.sleep(0.18)
+    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+
 
 
 # ---------------------------------------------------------
@@ -1475,11 +1609,13 @@ def print_startup_diagnostics():
     gpu_name = ""
     providers = []
     try:
+        from face_engine import _HAS_CUDA
         import onnxruntime as ort
         providers = ort.get_available_providers()
-        gpu_ok = "CUDAExecutionProvider" in providers
+        gpu_ok = bool(_HAS_CUDA)
     except Exception as e:
-        print(f"  ONNX providers error: {e}")
+        providers = []
+        gpu_ok = False
 
     try:
         import subprocess
@@ -1499,11 +1635,10 @@ def print_startup_diagnostics():
             print(f"  Device     : {gpu_name}")
         print(f"  Providers  : {providers}")
     else:
-        print("  >>> GPU: NOT ACTIVE — using CPU <<<")
-        print(f"  Providers  : {providers or ['CPU only']}")
+        print("  >>> GPU: NOT ACTIVE — running cleanly on CPU <<<")
         if gpu_name:
-            print(f"  nvidia-smi : {gpu_name} (driver OK, ORT not using CUDA)")
-        print("  Tip        : pip install onnxruntime-gpu + CUDA toolkit")
+            print(f"  GPU Hardware: {gpu_name} (NVIDIA driver detected)")
+        print("  Runtime    : CPUExecutionProvider active (det_size=640, fast & optimized)")
 
     print("-" * 60)
     # Face engine (loads models once)
@@ -1528,12 +1663,19 @@ def print_startup_diagnostics():
 
     print("-" * 60)
     print("  DATA")
-    try:
-        sdb = load_students_db()
+    sdb = None
+    for attempt in range(2):
+        try:
+            sdb = load_students_db()
+            break
+        except Exception:
+            import time
+            time.sleep(0.6)
+    if sdb is not None:
         n = len(sdb)
         enc = sum(len(s.get("encodings", {})) for s in sdb.values())
         print(f"  Students   : {n}  encodings={enc}")
-    except Exception:
+    else:
         print("  Students   : (could not query MongoDB)")
     try:
         att_count = get_db().attendance.count_documents({})

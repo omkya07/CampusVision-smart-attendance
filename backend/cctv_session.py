@@ -10,7 +10,19 @@ import numpy as np
 import threading
 import time
 import os
+import base64
 from datetime import datetime
+
+try:
+    from dotenv import load_dotenv
+    _root_env = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    if os.path.exists(_root_env):
+        load_dotenv(_root_env)
+    _backend_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(_backend_env):
+        load_dotenv(_backend_env)
+except Exception:
+    pass
 
 from face_engine import FaceEngine
 from latest_frame_reader import LatestFrameReader
@@ -18,9 +30,7 @@ from face_index import FaceIndex
 
 # For a wide classroom shot (many students, back row far from camera),
 # resizing down too much before detection throws away the detail that
-# distant/small faces need. Default raised for that use case - override if
-# your camera framing is tighter (e.g. small room, few students):
-#   set FRAME_RESIZE_WIDTH=960     (Windows)   /   export FRAME_RESIZE_WIDTH=960   (Mac/Linux)
+# distant/small faces need.
 def _cuda_available():
     try:
         import onnxruntime as ort
@@ -35,15 +45,16 @@ SAMPLE_INTERVAL_SEC = float(os.environ.get(
     "1.3" if _HAS_CUDA else "2.5",
 ))
 PREVIEW_INTERVAL_SEC = 0.5
-CONFIRM_COUNT = 1          # 1 solid match is enough
+# Confirmation count: require 3 sightings across distinct frames before marking attendance
+CONFIRM_COUNT = int(os.environ.get("CONFIRM_COUNT", "3"))
 FRAME_RESIZE_WIDTH = int(os.environ.get(
     "FRAME_RESIZE_WIDTH",
-    "1920" if _HAS_CUDA else "960",
+    "1920" if _HAS_CUDA else "1280",
 ))
 RECONNECT_DELAY_SEC = 3
 MAX_RECONNECT_ATTEMPTS = 15
-# Looser than webcam scan — ceiling CCTV angle differs a lot from enrollment
-CCTV_MATCH_THRESHOLD = 0.28
+# Calibrated for classroom CCTV: 0.30 prevents false positive identity swapping
+CCTV_MATCH_THRESHOLD = float(os.environ.get("CCTV_MATCH_THRESHOLD", "0.30"))
 
 
 class CCTVSession:
@@ -69,6 +80,10 @@ class CCTVSession:
         self.detector_mode = "init"
         self._preview_jpeg = None
         self._preview_lock = threading.Lock()
+        self._detections = []
+        self._detections_time = 0.0
+        self._detections_lock = threading.Lock()
+        self._rec_thread = None
         try:
             eng = FaceEngine.get()
             self.detector_mode = eng.model_name
@@ -97,6 +112,9 @@ class CCTVSession:
             self._running = True
             with self._preview_lock:
                 self._preview_jpeg = None
+            with self._detections_lock:
+                self._detections = []
+                self._detections_time = 0.0
             db = self._load_students_db()
             self.enrolled_faces = sum(len(s.get("encodings", {})) for s in db.values())
             self._thread = threading.Thread(target=self._run, daemon=True)
@@ -149,20 +167,25 @@ class CCTVSession:
             with self._preview_lock:
                 self._preview_jpeg = buf.tobytes()
 
+    def _create_status_frame(self, title: str, subtitle: str, clock_str: str):
+        img = np.zeros((360, 640, 3), dtype=np.uint8)
+        img[:] = (18, 22, 28)
+        cv2.putText(img, title, (30, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.70, (0, 200, 255), 2, cv2.LINE_AA)
+        cv2.putText(img, subtitle, (30, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 160, 160), 1, cv2.LINE_AA)
+        cv2.putText(img, f"Live Clock: {clock_str}", (30, 225), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (40, 220, 160), 1, cv2.LINE_AA)
+        return img
+
     def _run(self):
-        # LatestFrameReader runs its own background thread that continuously
-        # drains the RTSP stream and always exposes the single newest frame.
-        # This decouples "how fast the camera sends frames" from "how long our
-        # detection takes" - no more backlog, no more catch-up lag.
+        # 1. Start low-latency RTSP frame reader
         reader = LatestFrameReader(
             self.rtsp_url,
             reconnect_delay_sec=RECONNECT_DELAY_SEC,
             max_reconnect_attempts=MAX_RECONNECT_ATTEMPTS,
         ).start()
 
-        # Give it a moment to establish the connection before giving up
+        # Give it a moment to connect
         wait_start = time.time()
-        while reader.read() is None and reader._running and time.time() - wait_start < 8:
+        while reader.read() is None and reader._running and time.time() - wait_start < 6:
             time.sleep(0.05)
 
         if reader.read() is None and not reader._running:
@@ -172,9 +195,13 @@ class CCTVSession:
                 self._running = False
             return
 
-        last_sample_time = 0
-        last_preview_time = 0
+        # 2. Start asynchronous AI recognition worker in a separate background thread
+        # This prevents the heavy ArcFace / SCRFD CNN pipeline from blocking live preview frames!
+        self._rec_thread = threading.Thread(target=self._recognition_worker, args=(reader,), daemon=True)
+        self._rec_thread.start()
 
+        # 3. High-rate Preview Loop (~4-5 FPS)
+        # Keeps camera video moving continuously and updates the clock second-by-second with zero lag!
         while True:
             with self._lock:
                 if self._stop_flag:
@@ -182,58 +209,109 @@ class CCTVSession:
                 if time.time() - self.start_time >= self.duration_sec:
                     break
 
-            frame = reader.read()
-            if frame is None:
-                if not reader._running:
-                    self.last_error = reader.last_error or "CCTV stream disconnected."
-                    break
-                time.sleep(0.02)
+            frame, frame_id, age, connected = reader.read_with_meta()
+            now = time.time()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if frame is None or not connected or age > 6.0:
+                reconn_msg = f"Connecting / Reconnecting ({self.rtsp_url[:40]})..." if not connected else "Buffering stream frames..."
+                status_img = self._create_status_frame("CCTV Camera Connecting / Buffering", reconn_msg, now_str)
+                self._set_preview(status_img)
+                time.sleep(0.3)
                 continue
 
-            now = time.time()
-            do_recognize = (now - last_sample_time) >= SAMPLE_INTERVAL_SEC
-            do_preview = (now - last_preview_time) >= PREVIEW_INTERVAL_SEC
+            h, w = frame.shape[:2]
+            scale = 1.0
+            if w > FRAME_RESIZE_WIDTH:
+                scale = FRAME_RESIZE_WIDTH / float(w)
+                frame = cv2.resize(frame, (FRAME_RESIZE_WIDTH, int(h * scale)))
 
-            try:
-                if do_recognize:
-                    # Full pipeline: detection + embedding + matching.
-                    # This is the expensive step - only run it on its own interval.
-                    annotated, n_faces = self._process_frame(frame, recognize=True)
-                    self._set_preview(annotated)
-                    last_preview_time = now
-                    last_sample_time = now
-                    self.frames_processed += 1
-                    self.faces_last_frame = n_faces
-                elif do_preview:
-                    # Cheap refresh: just re-stream the current frame with the
-                    # last-known HUD text, WITHOUT re-running detection. Keeps
-                    # the preview looking live between recognition ticks at
-                    # near-zero extra compute cost.
-                    self._set_preview(self._cheap_hud_frame(frame))
-                    last_preview_time = now
-            except Exception as e:
-                self.last_error = f"Frame processing error: {str(e)}"
-                print(f"[CCTV] {self.last_error}")
+            if len(frame.shape) == 2:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            elif frame.shape[2] == 1:
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
+            annotated = frame.copy()
+
+            # Overlay face bounding boxes from latest AI pass (if < 3.5 seconds old)
+            with self._detections_lock:
+                dets = list(self._detections)
+                det_age = now - self._detections_time
+
+            if det_age < 3.5:
+                for d in dets:
+                    bx1, by1, bx2, by2 = d["bbox"]
+                    x1 = max(0, int(bx1 * scale))
+                    y1 = max(0, int(by1 * scale))
+                    x2 = min(annotated.shape[1] - 1, int(bx2 * scale))
+                    y2 = min(annotated.shape[0] - 1, int(by2 * scale))
+                    lbl = d["label"]
+                    col = d["color"]
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), col, 2)
+                    tw = max(90, len(lbl) * 9)
+                    cv2.rectangle(annotated, (x1, max(0, y1 - 22)), (min(annotated.shape[1] - 1, x1 + tw), y1), col, -1)
+                    cv2.putText(
+                        annotated, lbl, (x1 + 4, max(14, y1 - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 0, 0), 1, cv2.LINE_AA,
+                    )
+
+            # Top live HUD bar with real-time second-by-second clock and active live badge
+            cv2.rectangle(annotated, (0, 0), (annotated.shape[1], 34), (18, 22, 28), -1)
+            cv2.circle(annotated, (14, 17), 5, (40, 220, 120), -1)
+            hud_left = f"LIVE  |  {now_str}  |  Faces: {self.faces_last_frame}  |  Marked: {len(self.marked_this_session)}"
+            cv2.putText(annotated, hud_left, (26, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (40, 220, 160), 1, cv2.LINE_AA)
+
+            hud_right = f"{self.session_name} ({self.detector_mode})"
+            right_x = max(200, annotated.shape[1] - len(hud_right) * 9 - 15)
+            cv2.putText(annotated, hud_right, (right_x, 23),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.46, (200, 200, 200), 1, cv2.LINE_AA)
+
+            self._set_preview(annotated)
+            time.sleep(0.20)  # ~5 FPS fast preview update: smooth movement, real-time seconds!
 
         reader.stop()
         with self._lock:
             self._running = False
             self._finished_at = time.time()
 
-    def _cheap_hud_frame(self, frame):
-        """Resize + HUD text only - no detection. Used for preview-only ticks."""
-        h, w = frame.shape[:2]
-        if w > FRAME_RESIZE_WIDTH:
-            scale = FRAME_RESIZE_WIDTH / w
-            frame = cv2.resize(frame, (FRAME_RESIZE_WIDTH, int(h * scale)))
-        hud = f"Faces: {self.faces_last_frame}  |  Marked: {len(self.marked_this_session)}  |  {self.detector_mode}"
-        cv2.putText(frame, hud, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (40, 220, 160), 2, cv2.LINE_AA)
-        return frame
+    def _recognition_worker(self, reader):
+        """Asynchronous background worker that runs AI face detection and recognition."""
+        last_sample_time = 0.0
+        while True:
+            with self._lock:
+                if self._stop_flag or not self._running:
+                    break
+                if time.time() - self.start_time >= self.duration_sec:
+                    break
 
-    def _process_frame(self, frame, recognize=True):
+            now = time.time()
+            if (now - last_sample_time) < SAMPLE_INTERVAL_SEC:
+                time.sleep(0.05)
+                continue
+
+            frame = reader.read()
+            if frame is None:
+                time.sleep(0.08)
+                continue
+
+            try:
+                dets, n_faces = self._detect_and_match(frame)
+                with self._detections_lock:
+                    self._detections = dets
+                    self._detections_time = time.time()
+                self.faces_last_frame = n_faces
+                self.frames_processed += 1
+                last_sample_time = time.time()
+            except Exception as e:
+                self.last_error = f"Recognition worker error: {str(e)}"
+                print(f"[CCTV] {self.last_error}")
+                time.sleep(0.3)
+
+    def _detect_and_match(self, frame):
+        """Heavy step: FaceEngine detection + embedding + gallery match."""
         h, w = frame.shape[:2]
         if w > FRAME_RESIZE_WIDTH:
-            scale = FRAME_RESIZE_WIDTH / w
+            scale = FRAME_RESIZE_WIDTH / float(w)
             frame = cv2.resize(frame, (FRAME_RESIZE_WIDTH, int(h * scale)))
 
         if len(frame.shape) == 2:
@@ -243,55 +321,54 @@ class CCTVSession:
 
         eng = FaceEngine.get()
         faces = eng.detect_and_embed(frame)
-        annotated = frame.copy()
+
+        db = self._load_students_db()
+        classes = getattr(self, "classes", [])
+        branches = getattr(self, "branches", [])
+        divisions = getattr(self, "divisions", [])
+        semesters = getattr(self, "semesters", [])
 
         known, meta = [], []
-        if recognize:
-            db = self._load_students_db()
-            classes = getattr(self, "classes", [])
-            branches = getattr(self, "branches", [])
-            divisions = getattr(self, "divisions", [])
-            semesters = getattr(self, "semesters", [])
-            for prn, s in db.items():
-                if classes:
-                    matched = False
-                    s_branch = (s.get("branch") or "").strip().lower()
-                    s_div = (s.get("division") or "").strip().upper()
-                    s_sem = (s.get("semester") or "").strip().upper()
-                    for c in classes:
-                        if isinstance(c, dict):
-                            req_br = (c.get("branch") or "").strip().lower()
-                            req_div = (c.get("division") or "").strip().upper()
-                            req_sems = [str(x).upper() for x in c.get("semesters", [])]
-                            if req_br and req_br != s_branch:
-                                continue
-                            if req_div and req_div != s_div:
-                                continue
-                            if req_sems and s_sem not in req_sems:
-                                continue
+        for prn, s in db.items():
+            if classes:
+                matched = False
+                s_branch = (s.get("branch") or "").strip().lower()
+                s_div = (s.get("division") or "").strip().upper()
+                s_sem = (s.get("semester") or "").strip().upper()
+                for c in classes:
+                    if isinstance(c, dict):
+                        req_br = (c.get("branch") or "").strip().lower()
+                        req_div = (c.get("division") or "").strip().upper()
+                        req_sems = [str(x).upper() for x in c.get("semesters", [])]
+                        if req_br and req_br != s_branch:
+                            continue
+                        if req_div and req_div != s_div:
+                            continue
+                        if req_sems and s_sem not in req_sems:
+                            continue
+                        matched = True
+                        break
+                    elif isinstance(c, str):
+                        parts = c.split("_")
+                        if len(parts) >= 3 and parts[2].upper() == s_div and parts[0].lower() in s_branch:
                             matched = True
                             break
-                        elif isinstance(c, str):
-                            parts = c.split("_")
-                            if len(parts) >= 3 and parts[2].upper() == s_div and parts[0].lower() in s_branch:
-                                matched = True
-                                break
-                    if not matched:
-                        continue
-                else:
-                    if branches and s.get("branch") not in branches:
-                        continue
-                    if divisions and s.get("division") not in divisions:
-                        continue
-                    if semesters and s.get("semester") not in semesters:
-                        continue
-                for _a, enc in s.get("encodings", {}).items():
-                    known.append(np.array(enc, dtype=np.float32))
-                    meta.append((prn, s))
+                if not matched:
+                    continue
+            else:
+                if branches and s.get("branch") not in branches:
+                    continue
+                if divisions and s.get("division") not in divisions:
+                    continue
+                if semesters and s.get("semester") not in semesters:
+                    continue
+            for _a, enc in s.get("encodings", {}).items():
+                known.append(np.array(enc, dtype=np.float32))
+                meta.append((prn, s))
 
         # Fast gallery match (FAISS if installed, else NumPy)
         gallery = None
-        if recognize and known:
+        if known:
             try:
                 dim = eng.embedding_dim()
             except Exception:
@@ -299,8 +376,9 @@ class CCTVSession:
             gallery = FaceIndex(dim=dim, threshold=CCTV_MATCH_THRESHOLD)
             gallery.build(known, meta)
 
+        detections = []
         for face in faces:
-            x1, y1, x2, y2 = face.bbox
+            x1, y1, x2, y2 = [int(v) for v in face.bbox]
             label = "Unknown"
             color = (0, 200, 255)
 
@@ -310,23 +388,42 @@ class CCTVSession:
                     prn, student = hit
                     label = f"{student['name']} ({student['roll_no']}) {score:.2f}"
                     color = (0, 220, 120)
-                    self._register_sighting(prn, student)
+
+                    # Extract actual live CCTV face crop for attendance snapshot proof
+                    snap_b64 = None
+                    try:
+                        hf, wf = frame.shape[:2]
+                        pad_x = int((x2 - x1) * 0.35)
+                        pad_y = int((y2 - y1) * 0.40)
+                        cx1 = max(0, int(x1 - pad_x))
+                        cy1 = max(0, int(y1 - pad_y))
+                        cx2 = min(wf, int(x2 + pad_x))
+                        cy2 = min(hf, int(y2 + pad_y))
+                        if cx2 > cx1 and cy2 > cy1:
+                            crop = frame[cy1:cy2, cx1:cx2].copy()
+                            ch, cw = crop.shape[:2]
+                            if max(ch, cw) > 240:
+                                sc = 240.0 / float(max(ch, cw))
+                                crop = cv2.resize(crop, (int(cw * sc), int(ch * sc)))
+                            ok, buf = cv2.imencode(".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                            if ok:
+                                snap_b64 = "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("utf-8")
+                    except Exception as e:
+                        print(f"[CCTV] Error generating live snapshot crop: {e}")
+
+                    self._register_sighting(prn, student, snapshot_b64=snap_b64)
                 elif score > 0:
                     label = f"Unknown ({score:.2f})"
 
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-            tw = max(90, len(label) * 9)
-            cv2.rectangle(annotated, (x1, max(0, y1 - 22)), (x1 + tw, y1), color, -1)
-            cv2.putText(
-                annotated, label, (x1 + 4, max(14, y1 - 6)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA,
-            )
+            detections.append({
+                "bbox": (x1, y1, x2, y2),
+                "label": label,
+                "color": color
+            })
 
-        hud = f"Faces: {len(faces)}  |  Marked: {len(self.marked_this_session)}  |  {self.detector_mode}"
-        cv2.putText(annotated, hud, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (40, 220, 160), 2, cv2.LINE_AA)
-        return annotated, len(faces)
+        return detections, len(faces)
 
-    def _register_sighting(self, prn, student):
+    def _register_sighting(self, prn, student, snapshot_b64=None):
         with self._lock:
             if prn not in self.tracked:
                 self.tracked[prn] = {
@@ -334,13 +431,29 @@ class CCTVSession:
                     "name": student["name"],
                     "roll_no": student["roll_no"],
                     "marked": False,
+                    "snapshot": snapshot_b64,
                 }
+            elif snapshot_b64 and not self.tracked[prn].get("snapshot"):
+                self.tracked[prn]["snapshot"] = snapshot_b64
+                if self.tracked[prn].get("marked"):
+                    try:
+                        self._mark_attendance(
+                            student,
+                            session_name=self.session_name or "Lecture",
+                            snapshot_b64=snapshot_b64,
+                        )
+                    except Exception:
+                        pass
+
             self.tracked[prn]["seen_count"] += 1
             if (self.tracked[prn]["seen_count"] >= CONFIRM_COUNT
                     and not self.tracked[prn]["marked"]):
+                snap_to_use = snapshot_b64 or self.tracked[prn].get("snapshot")
                 try:
                     newly_marked = self._mark_attendance(
-                        student, session_name=self.session_name or "Lecture"
+                        student,
+                        session_name=self.session_name or "Lecture",
+                        snapshot_b64=snap_to_use,
                     )
                 except Exception as e:
                     print(f"[CCTV] mark_attendance error: {e}")

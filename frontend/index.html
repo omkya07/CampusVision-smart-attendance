@@ -8,7 +8,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css?v=5">
   <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
-  <script defer src="/js/app.js?v=5"></script>
+  <script defer src="/js/app.js?v=9"></script>
 </head>
 <body>
 
@@ -199,7 +199,7 @@
             <div style="font-size: 13px; font-weight: 600; color: var(--text-primary);">
               Filter & Pick Division <span class="muted-inline">(Branch &rarr; Year &rarr; Division)</span>
             </div>
-            <button type="button" class="btn secondary btn-sm" onclick="manualPicker.clearFilters()" style="padding: 2px 8px; font-size: 11px;">
+            <button type="button" class="btn secondary btn-sm" onclick="window.manualPicker?.clearFilters()" style="padding: 2px 8px; font-size: 11px;">
               Clear Filters
             </button>
           </div>
@@ -207,13 +207,13 @@
           <div class="class-filter-row">
             <div style="flex: 2; min-width: 150px;">
               <label class="picker-label">Branch</label>
-              <select id="manualPickerBranch" class="picker-select" onchange="manualPicker.onFilterChange()">
+              <select id="manualPickerBranch" class="picker-select" onchange="window.manualPicker?.onFilterChange()">
                 <option value="">— Select Branch —</option>
               </select>
             </div>
             <div style="flex: 2; min-width: 130px;">
               <label class="picker-label">Year</label>
-              <select id="manualPickerYear" class="picker-select" onchange="manualPicker.onFilterChange()">
+              <select id="manualPickerYear" class="picker-select" onchange="window.manualPicker?.onFilterChange()">
                 <option value="">— Select Year —</option>
                 <option value="FY">1st Year (FY)</option>
                 <option value="SY">2nd Year (SY)</option>
@@ -236,7 +236,7 @@
                 <span>Chosen Divisions:</span>
                 <span id="manualChosenCount" class="badge-count">0 chosen</span>
               </div>
-              <button type="button" class="btn secondary btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="manualPicker.clearAllChosen()">
+              <button type="button" class="btn secondary btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="window.manualPicker?.clearAllChosen()">
                 Clear All
               </button>
             </div>
@@ -378,7 +378,7 @@
             <div style="font-size: 13px; font-weight: 600; color: var(--text-primary);">
               Filter & Pick Division <span class="muted-inline">(Branch &rarr; Year &rarr; Division)</span>
             </div>
-            <button type="button" class="btn secondary btn-sm" onclick="cctvPicker.clearFilters()" style="padding: 2px 8px; font-size: 11px;">
+            <button type="button" class="btn secondary btn-sm" onclick="window.cctvPicker?.clearFilters()" style="padding: 2px 8px; font-size: 11px;">
               Clear Filters
             </button>
           </div>
@@ -386,13 +386,13 @@
           <div class="class-filter-row">
             <div style="flex: 2; min-width: 150px;">
               <label class="picker-label">Branch</label>
-              <select id="cctvPickerBranch" class="picker-select" onchange="cctvPicker.onFilterChange()">
+              <select id="cctvPickerBranch" class="picker-select" onchange="window.cctvPicker?.onFilterChange()">
                 <option value="">— Select Branch —</option>
               </select>
             </div>
             <div style="flex: 2; min-width: 130px;">
               <label class="picker-label">Year</label>
-              <select id="cctvPickerYear" class="picker-select" onchange="cctvPicker.onFilterChange()">
+              <select id="cctvPickerYear" class="picker-select" onchange="window.cctvPicker?.onFilterChange()">
                 <option value="">— Select Year —</option>
                 <option value="FY">1st Year (FY)</option>
                 <option value="SY">2nd Year (SY)</option>
@@ -415,7 +415,7 @@
                 <span>Chosen Divisions:</span>
                 <span id="cctvChosenCount" class="badge-count">0 chosen</span>
               </div>
-              <button type="button" class="btn secondary btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="cctvPicker.clearAllChosen()">
+              <button type="button" class="btn secondary btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="window.cctvPicker?.clearAllChosen()">
                 Clear All
               </button>
             </div>

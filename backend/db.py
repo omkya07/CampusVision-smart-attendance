@@ -74,8 +74,7 @@ def _get_certifi_ca_file():
         return None
 
 
-def _ensure_indexes(db):
-    """Safely create or verify collection indexes without crashing the app on startup."""
+def _run_ensure_indexes(db):
     global _indexes_initialized
     if _indexes_initialized:
         return
@@ -99,11 +98,16 @@ def _ensure_indexes(db):
             if getattr(e, "code", None) == 86:
                 pass
             else:
-                logger.warning("Could not create index %s on %s: %s", keys, coll_name, e)
+                logger.debug("Could not create index %s on %s: %s", keys, coll_name, e)
         except Exception as e:
-            logger.warning("Could not create index %s on %s: %s", keys, coll_name, e)
+            logger.debug("Could not create index %s on %s: %s", keys, coll_name, e)
 
     _indexes_initialized = True
+
+
+def _ensure_indexes(db):
+    """Safely create or verify collection indexes asynchronously in the background so app startup is never blocked."""
+    threading.Thread(target=_run_ensure_indexes, args=(db,), daemon=True).start()
 
 
 def get_db():
@@ -138,6 +142,7 @@ def get_db():
             "socketTimeoutMS": 20000,
             "maxPoolSize": 50,
             "minPoolSize": 1,
+            "retryWrites": True,
         }
 
         # Prevent Windows/macOS SSL certificate verify errors with Atlas
